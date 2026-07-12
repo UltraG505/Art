@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
-  base: "/Art/",
+  base: "/",
   plugins: [
     VitePWA({
       registerType: "autoUpdate",
@@ -16,8 +16,8 @@ export default defineConfig({
         background_color: "#16151a",
         display: "standalone",
         orientation: "portrait",
-        start_url: "/Art/",
-        scope: "/Art/",
+        start_url: "/",
+        scope: "/",
         icons: [
           { src: "icons/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
           { src: "icons/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "maskable" },
