@@ -11,10 +11,16 @@ const PRESETS: Preset[] = [
   { label: "Story", w: 1080, h: 1920 },
 ];
 
+const BACKGROUNDS = [
+  { label: "Paper", color: "#e8e2d6" },
+  { label: "Black", color: "#131217" },
+  { label: "White", color: "#f6f3ec" },
+];
+
 const MIN_DIM = 200;
 const MAX_DIM = 3000;
 
-export function openNewCanvasDialog(onChoose: (w?: number, h?: number) => void) {
+export function openNewCanvasDialog(onChoose: (w: number | undefined, h: number | undefined, bg: string) => void) {
   const overlay = document.createElement("div");
   overlay.className = "dialog-overlay";
 
@@ -25,12 +31,37 @@ export function openNewCanvasDialog(onChoose: (w?: number, h?: number) => void) 
   title.textContent = "New Canvas";
   dialog.appendChild(title);
 
-  const presetGrid = document.createElement("div");
-  presetGrid.className = "dialog__presets";
+  let selectedBg = BACKGROUNDS[0].color;
 
   function close() {
     overlay.remove();
   }
+
+  // background picker: glow strokes need a dark ground to read as light
+  const bgRow = document.createElement("div");
+  bgRow.className = "dialog__bg-row";
+  const bgLabel = document.createElement("span");
+  bgLabel.textContent = "Background";
+  bgRow.appendChild(bgLabel);
+  const bgButtons: HTMLButtonElement[] = [];
+  for (const bg of BACKGROUNDS) {
+    const b = document.createElement("button");
+    b.className = "bg-swatch";
+    b.style.background = bg.color;
+    b.title = bg.label;
+    b.setAttribute("aria-label", `background ${bg.label}`);
+    b.addEventListener("click", () => {
+      selectedBg = bg.color;
+      for (const other of bgButtons) other.classList.toggle("is-active", other === b);
+    });
+    bgButtons.push(b);
+    bgRow.appendChild(b);
+  }
+  bgButtons[0].classList.add("is-active");
+  dialog.appendChild(bgRow);
+
+  const presetGrid = document.createElement("div");
+  presetGrid.className = "dialog__presets";
 
   for (const preset of PRESETS) {
     const btn = document.createElement("button");
@@ -53,7 +84,7 @@ export function openNewCanvasDialog(onChoose: (w?: number, h?: number) => void) 
 
     btn.append(swatch, label, dims);
     btn.addEventListener("click", () => {
-      onChoose(preset.w ?? undefined, preset.h ?? undefined);
+      onChoose(preset.w ?? undefined, preset.h ?? undefined, selectedBg);
       close();
     });
     presetGrid.appendChild(btn);
@@ -96,7 +127,7 @@ export function openNewCanvasDialog(onChoose: (w?: number, h?: number) => void) 
   createBtn.addEventListener("click", () => {
     const w = Math.min(MAX_DIM, Math.max(MIN_DIM, Math.round(Number(widthInput.value) || 0)));
     const h = Math.min(MAX_DIM, Math.max(MIN_DIM, Math.round(Number(heightInput.value) || 0)));
-    onChoose(w, h);
+    onChoose(w, h, selectedBg);
     close();
   });
 

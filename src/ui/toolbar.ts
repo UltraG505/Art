@@ -1,11 +1,41 @@
 import { PALETTE } from "./palette";
 import type { PaintEngine } from "../engine/paintEngine";
+import type { BrushId } from "../engine/types";
 import { exportPng } from "../export/png";
 import { openNewCanvasDialog } from "./newCanvasDialog";
+import { openGalleryPanel } from "./galleryPanel";
+
+const BRUSH_OPTIONS: { id: BrushId; label: string; title: string }[] = [
+  { id: "wetBlend", label: "Paint", title: "wet paint - blends with color underneath" },
+  { id: "chalk", label: "Chalk", title: "dry pastel - grainy scribble marks" },
+  { id: "glow", label: "Glow", title: "light trail - best on a black canvas" },
+];
 
 export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   const bar = document.createElement("div");
   bar.className = "toolbar";
+
+  // brush picker
+  const brushWrap = document.createElement("div");
+  brushWrap.className = "toolbar__brushes";
+  const brushButtons: HTMLButtonElement[] = [];
+  for (const opt of BRUSH_OPTIONS) {
+    const b = document.createElement("button");
+    b.className = "brush-btn";
+    b.textContent = opt.label;
+    b.title = opt.title;
+    b.setAttribute("aria-label", `brush ${opt.label}`);
+    b.addEventListener("click", () => {
+      engine.brush = opt.id;
+      for (const other of brushButtons) other.classList.toggle("is-active", other === b);
+    });
+    brushButtons.push(b);
+    brushWrap.appendChild(b);
+  }
+  brushButtons[0].classList.add("is-active");
+
+  const divider0 = document.createElement("div");
+  divider0.className = "toolbar__divider";
 
   const swatchWrap = document.createElement("div");
   swatchWrap.className = "toolbar__swatches";
@@ -100,8 +130,14 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   newCanvasBtn.addEventListener("click", () => {
     const proceed = !engine.canUndo() || confirm("Start a new canvas? This will discard your current painting.");
     if (!proceed) return;
-    openNewCanvasDialog((w, h) => engine.newCanvas(w, h));
+    openNewCanvasDialog((w, h, bg) => engine.newCanvas(w, h, bg));
   });
+
+  const galleryBtn = document.createElement("button");
+  galleryBtn.className = "icon-btn";
+  galleryBtn.textContent = "▤";
+  galleryBtn.setAttribute("aria-label", "gallery");
+  galleryBtn.addEventListener("click", () => openGalleryPanel(engine));
 
   const exportBtn = document.createElement("button");
   exportBtn.className = "icon-btn";
@@ -111,15 +147,15 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
     exportPng(engine.exportCanvas());
   });
 
-  actions.append(newCanvasBtn, undoBtn, redoBtn, clearBtn, exportBtn);
+  actions.append(newCanvasBtn, galleryBtn, undoBtn, redoBtn, clearBtn, exportBtn);
 
   function refreshHistoryButtons() {
     undoBtn.disabled = !engine.canUndo();
     redoBtn.disabled = !engine.canRedo();
   }
-  engine.onHistoryChange = refreshHistoryButtons;
+  engine.onHistory(refreshHistoryButtons);
   refreshHistoryButtons();
 
-  bar.append(swatchWrap, divider1, sizeWrap, divider2, actions);
+  bar.append(brushWrap, divider0, swatchWrap, divider1, sizeWrap, divider2, actions);
   return bar;
 }

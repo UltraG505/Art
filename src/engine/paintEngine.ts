@@ -1,12 +1,19 @@
-import type { Stroke, StrokePoint } from "./types";
-import { renderStroke, strokeSegment, initStroke, type StampState, type RandFn } from "./wetBlendBrush";
+import type { Stroke, StrokePoint, BrushId, PaintingDoc } from "./types";
+import { renderStroke, getBrush, type BrushImpl, type RandFn } from "./brushes";
 import { mulberry32 } from "./random";
 import { createGrainTile, paintGrainBackground } from "./grain";
 
-const PAPER_COLOR = "#e8e2d6";
+export const DEFAULT_BG = "#e8e2d6";
+
+// Total pixel budget for undo snapshots. Each snapshot is a full raster copy
+// of the paint layer (w*h*4 bytes), so on large fixed-size canvases keeping a
+// fixed count would eat hundreds of MB and crash mobile tabs; instead the
+// snapshot depth adapts to canvas size within this budget.
+const SNAPSHOT_BYTE_BUDGET = 96 * 1024 * 1024;
 
 export class PaintEngine {
   readonly root: HTMLDivElement;
+  private frame: HTMLDivElement;
   private bgCanvas: HTMLCanvasElement;
   private paintCanvas: HTMLCanvasElement;
   private overlayCanvas: HTMLCanvasElement;
@@ -16,19 +23,17 @@ export class PaintEngine {
   private strokes: Stroke[] = [];
   private redoStack: Stroke[] = [];
   private current: Stroke | null = null;
-  private liveState: StampState | null = null;
+  private liveBrush: BrushImpl | null = null;
+  private liveState: unknown = null;
   private liveRand: RandFn | null = null;
 
   // Undo/redo would otherwise have to replay every stamp of every stroke
-  // ever drawn (renderStroke over the full `strokes` history), which gets
-  // slower the longer a session runs and eventually freezes the page. Instead
-  // we cache a raster snapshot of the canvas from just before each of the
-  // last MAX_UNDO_SNAPSHOTS strokes, so undo/redo is a single drawImage
-  // (or one single-stroke replay for redo) regardless of history length.
-  // Undoing further back than that falls back to a full replay.
+  // ever drawn, which gets slower the longer a session runs. Instead we cache
+  // a raster snapshot of the canvas from just before each recent stroke, so
+  // undo/redo is a single drawImage regardless of history length. Undoing
+  // further back than the cached depth falls back to a full replay.
   private undoSnapshots: { stroke: Stroke; canvas: HTMLCanvasElement }[] = [];
   private pendingSnapshot: HTMLCanvasElement | null = null;
-  private readonly MAX_UNDO_SNAPSHOTS = 20;
 
   private dpr = Math.max(1, window.devicePixelRatio || 1);
   // "logical" size: the coordinate space strokes are recorded/rendered in.
@@ -37,7 +42,6 @@ export class PaintEngine {
   // store still use these exact logical dimensions.
   private cssW = 0;
   private cssH = 0;
-  private frame: HTMLDivElement;
   private fixedSize: { w: number; h: number } | null = null;
   // backing-store pixels per logical pixel: devicePixelRatio when filling the
   // screen (for crisp rendering), or exactly 1 for a fixed size so exports
@@ -46,8 +50,10 @@ export class PaintEngine {
 
   color = "#7a1f2b";
   size = 34;
+  brush: BrushId = "wetBlend";
+  bg = DEFAULT_BG;
 
-  onHistoryChange: (() => void) | null = null;
+  private historyListeners: (() => void)[] = [];
 
   constructor(container: HTMLElement) {
     this.root = document.createElement("div");
@@ -74,6 +80,25 @@ export class PaintEngine {
     window.addEventListener("resize", () => this.resize());
 
     this.bindPointerEvents();
+  }
+
+  onHistory(cb: () => void) {
+    this.historyListeners.push(cb);
+  }
+
+  private emitHistory() {
+    for (const cb of this.historyListeners) cb();
+  }
+
+  private maxSnapshots(): number {
+    const bytes = this.paintCanvas.width * this.paintCanvas.height * 4 || 1;
+    return Math.max(4, Math.min(24, Math.floor(SNAPSHOT_BYTE_BUDGET / bytes)));
+  }
+
+  private pushSnapshot(stroke: Stroke, canvas: HTMLCanvasElement) {
+    this.undoSnapshots.push({ stroke, canvas });
+    const max = this.maxSnapshots();
+    while (this.undoSnapshots.length > max) this.undoSnapshots.shift();
   }
 
   private resize() {
@@ -109,20 +134,40 @@ export class PaintEngine {
 
   // Starts a fresh canvas. Pass w/h to fix the canvas to that exact pixel
   // resolution (displayed scaled-to-fit); omit both to fill the screen.
-  newCanvas(w?: number, h?: number) {
+  newCanvas(w?: number, h?: number, bg?: string) {
     this.fixedSize = w && h ? { w, h } : null;
+    this.bg = bg ?? DEFAULT_BG;
     this.strokes = [];
     this.redoStack = [];
     this.undoSnapshots = [];
     this.pendingSnapshot = null;
     this.resize();
-    this.onHistoryChange?.();
+    this.emitHistory();
+  }
+
+  getDoc(): PaintingDoc {
+    return { v: 1, strokes: this.strokes, fixedSize: this.fixedSize, bg: this.bg };
+  }
+
+  loadDoc(doc: PaintingDoc) {
+    this.fixedSize = doc.fixedSize;
+    this.bg = doc.bg || DEFAULT_BG;
+    this.strokes = doc.strokes ?? [];
+    this.redoStack = [];
+    this.undoSnapshots = [];
+    this.pendingSnapshot = null;
+    this.resize();
+    this.emitHistory();
+  }
+
+  hasContent(): boolean {
+    return this.strokes.length > 0;
   }
 
   private redrawAll() {
     const bgCtx = this.bgCanvas.getContext("2d")!;
     bgCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
-    paintGrainBackground(bgCtx, this.cssW, this.cssH, this.grainTile, PAPER_COLOR);
+    paintGrainBackground(bgCtx, this.cssW, this.cssH, this.grainTile, this.bg);
 
     const ovCtx = this.overlayCanvas.getContext("2d")!;
     ovCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -172,44 +217,58 @@ export class PaintEngine {
       el.setPointerCapture(e.pointerId);
       const p = this.toLocal(e);
       const seed = Math.floor(Math.random() * 2 ** 31);
+      // brush size is chosen against what's on screen; scale it into canvas
+      // pixels so the brush feels the same width under your finger whether
+      // the canvas is screen-sized or a 2000px fixed canvas shown scaled down
+      const rect = this.paintCanvas.getBoundingClientRect();
+      const resolvedSize = this.size * (this.cssW / rect.width);
       this.current = {
         id: crypto.randomUUID(),
-        brush: "wetBlend",
+        brush: this.brush,
         color: this.color,
-        size: this.size,
+        size: resolvedSize,
         seed,
         points: [p],
       };
-      this.liveState = initStroke(this.color);
+      this.liveBrush = getBrush(this.brush);
+      this.liveState = this.liveBrush.init(this.color);
       this.liveRand = mulberry32(seed);
       this.redoStack = [];
       this.pendingSnapshot = this.snapshotCanvas();
     });
 
     el.addEventListener("pointermove", (e) => {
-      if (!this.current || !this.liveState || !this.liveRand) return;
-      const prev = this.current.points[this.current.points.length - 1];
-      const p = this.toLocal(e);
-      this.current.points.push(p);
-      strokeSegment(this.paintCtx, this.liveState, this.liveRand, prev, p, this.current.color, this.current.size);
+      if (!this.current || !this.liveBrush || !this.liveRand) return;
+      // coalesced events carry the full-rate touch samples Android collects
+      // between frames; using them makes fast curves smooth instead of angular
+      const events = typeof e.getCoalescedEvents === "function" && e.getCoalescedEvents().length > 0
+        ? e.getCoalescedEvents()
+        : [e];
+      for (const ev of events) {
+        const prev = this.current.points[this.current.points.length - 1];
+        const p = this.toLocal(ev);
+        if (p.x === prev.x && p.y === prev.y) continue;
+        this.current.points.push(p);
+        this.liveBrush.segment(this.paintCtx, this.liveState, this.liveRand, prev, p, this.current.color, this.current.size);
+      }
     });
 
     const finish = () => {
       if (!this.current) return;
-      if (this.current.points.length === 1 && this.liveState) {
+      if (this.current.points.length === 1 && this.liveBrush && this.liveRand) {
         const p = this.current.points[0];
-        strokeSegment(this.paintCtx, this.liveState, this.liveRand!, p, p, this.current.color, this.current.size);
+        this.liveBrush.segment(this.paintCtx, this.liveState, this.liveRand, p, p, this.current.color, this.current.size);
       }
       this.strokes.push(this.current);
       if (this.pendingSnapshot) {
-        this.undoSnapshots.push({ stroke: this.current, canvas: this.pendingSnapshot });
-        if (this.undoSnapshots.length > this.MAX_UNDO_SNAPSHOTS) this.undoSnapshots.shift();
+        this.pushSnapshot(this.current, this.pendingSnapshot);
       }
       this.pendingSnapshot = null;
       this.current = null;
+      this.liveBrush = null;
       this.liveState = null;
       this.liveRand = null;
-      this.onHistoryChange?.();
+      this.emitHistory();
     };
     el.addEventListener("pointerup", finish);
     el.addEventListener("pointercancel", finish);
@@ -218,7 +277,7 @@ export class PaintEngine {
     });
   }
 
-  private toLocal(e: PointerEvent): StrokePoint {
+  private toLocal(e: { clientX: number; clientY: number; timeStamp: number }): StrokePoint {
     const rect = this.paintCanvas.getBoundingClientRect();
     const scaleX = this.cssW / rect.width;
     const scaleY = this.cssH / rect.height;
@@ -241,7 +300,7 @@ export class PaintEngine {
       this.redoStack.push(s);
       this.redrawAll();
     }
-    this.onHistoryChange?.();
+    this.emitHistory();
   }
 
   redo() {
@@ -253,9 +312,8 @@ export class PaintEngine {
     renderStroke(this.paintCtx, s);
 
     this.strokes.push(s);
-    this.undoSnapshots.push({ stroke: s, canvas: snap });
-    if (this.undoSnapshots.length > this.MAX_UNDO_SNAPSHOTS) this.undoSnapshots.shift();
-    this.onHistoryChange?.();
+    this.pushSnapshot(s, snap);
+    this.emitHistory();
   }
 
   clear() {
@@ -264,7 +322,7 @@ export class PaintEngine {
     this.undoSnapshots = [];
     this.pendingSnapshot = null;
     this.redrawAll();
-    this.onHistoryChange?.();
+    this.emitHistory();
   }
 
   canUndo() {

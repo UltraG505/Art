@@ -1,6 +1,6 @@
-import { mulberry32 } from "./random";
-import type { Stroke } from "./types";
 import { createBrushMask } from "./brushMask";
+import type { BrushImpl } from "./brushes";
+import type { StrokePoint } from "./types";
 
 const WORK_SIZE = 96;
 let brushMask: HTMLCanvasElement | null = null;
@@ -35,28 +35,14 @@ function applyMask(patch: HTMLCanvasElement) {
 const PICKUP_RATE = 0.55; // how much of the canvas-under-brush gets absorbed each stamp
 const RELOAD_RATE = 0.05; // trickle of fresh brush color re-added each stamp
 
-export interface StampState {
+interface WetState {
   loaded: HTMLCanvasElement;
   scratch: HTMLCanvasElement;
-  lastX: number;
-  lastY: number;
-}
-
-export function initStroke(color: string): StampState {
-  const scratch = document.createElement("canvas");
-  scratch.width = WORK_SIZE;
-  scratch.height = WORK_SIZE;
-  return {
-    loaded: createLoadedPatch(color),
-    scratch,
-    lastX: NaN,
-    lastY: NaN,
-  };
 }
 
 function stamp(
   ctx: CanvasRenderingContext2D,
-  state: StampState,
+  state: WetState,
   x: number,
   y: number,
   diameter: number,
@@ -99,62 +85,39 @@ function stamp(
   ctx.restore();
 }
 
-export type RandFn = () => number;
+export const wetBlendBrush: BrushImpl = {
+  init(color: string): WetState {
+    const scratch = document.createElement("canvas");
+    scratch.width = WORK_SIZE;
+    scratch.height = WORK_SIZE;
+    return { loaded: createLoadedPatch(color), scratch };
+  },
 
-// Stamps the segment between two consecutive points. Exposed separately from
-// renderStroke so live drawing can call it incrementally (one segment per
-// pointermove) using the SAME running state/rand as a full replay would use -
-// otherwise live feedback and post-undo/resize replay would render differently.
-export function strokeSegment(
-  ctx: CanvasRenderingContext2D,
-  state: StampState,
-  rand: RandFn,
-  prev: { x: number; y: number; t: number },
-  cur: { x: number; y: number; t: number },
-  color: string,
-  size: number,
-) {
-  const dx = cur.x - prev.x;
-  const dy = cur.y - prev.y;
-  const dist = Math.hypot(dx, dy);
-  const dt = Math.max(1, cur.t - prev.t);
-  const speed = dist / dt; // px/ms
+  segment(ctx, rawState, rand, prev: StrokePoint, cur: StrokePoint, color, size) {
+    const state = rawState as WetState;
+    const dx = cur.x - prev.x;
+    const dy = cur.y - prev.y;
+    const dist = Math.hypot(dx, dy);
+    const dt = Math.max(1, cur.t - prev.t);
+    const speed = dist / dt; // px/ms
 
-  // faster strokes: thinner + more transparent (paint drags thin);
-  // slower strokes: thicker + more opaque (paint pools).
-  const speedFactor = Math.min(1, speed / 1.2);
-  const width = size * (1.15 - 0.35 * speedFactor);
-  const opacity = 0.85 - 0.35 * speedFactor;
+    // faster strokes: thinner + more transparent (paint drags thin);
+    // slower strokes: thicker + more opaque (paint pools).
+    const speedFactor = Math.min(1, speed / 1.2);
+    const width = size * (1.15 - 0.35 * speedFactor);
+    const opacity = 0.85 - 0.35 * speedFactor;
 
-  const spacing = Math.max(2, width * 0.14);
-  const steps = Math.max(1, Math.round(dist / spacing));
-  const angle = Math.atan2(dy, dx);
+    const spacing = Math.max(2, width * 0.14);
+    const steps = Math.max(1, Math.round(dist / spacing));
+    const angle = Math.atan2(dy, dx);
 
-  for (let s = 1; s <= steps; s++) {
-    const t = s / steps;
-    const jitter = (rand() - 0.5) * width * 0.06;
-    const px = prev.x + dx * t + Math.cos(angle + Math.PI / 2) * jitter;
-    const py = prev.y + dy * t + Math.sin(angle + Math.PI / 2) * jitter;
-    const rotation = angle + (rand() - 0.5) * 0.3;
-    stamp(ctx, state, px, py, width, opacity, rotation, color);
-  }
-}
-
-export function renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
-  const state = initStroke(stroke.color);
-  const rand = mulberry32(stroke.seed);
-  const pts = stroke.points;
-  if (pts.length === 0) return;
-
-  if (pts.length === 1) {
-    strokeSegment(ctx, state, rand, pts[0], pts[0], stroke.color, stroke.size);
-    return;
-  }
-
-  let prev = pts[0];
-  for (let i = 1; i < pts.length; i++) {
-    const cur = pts[i];
-    strokeSegment(ctx, state, rand, prev, cur, stroke.color, stroke.size);
-    prev = cur;
-  }
-}
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const jitter = (rand() - 0.5) * width * 0.06;
+      const px = prev.x + dx * t + Math.cos(angle + Math.PI / 2) * jitter;
+      const py = prev.y + dy * t + Math.sin(angle + Math.PI / 2) * jitter;
+      const rotation = angle + (rand() - 0.5) * 0.3;
+      stamp(ctx, state, px, py, width, opacity, rotation, color);
+    }
+  },
+};
