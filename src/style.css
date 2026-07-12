@@ -31,6 +31,14 @@ body {
 .paint-stack {
   position: absolute;
   inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.canvas-frame {
+  position: relative;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .paint-layer {
@@ -146,4 +154,122 @@ input[type="range"] {
 
 .icon-btn:active:not(:disabled) {
   background: #322f3a;
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+
+.dialog {
+  background: #1e1d23;
+  border: 1px solid #383741;
+  border-radius: 14px;
+  padding: 20px;
+  width: 100%;
+  max-width: 340px;
+  max-height: 85vh;
+  overflow-y: auto;
+  color: #eceaf0;
+}
+
+.dialog h2 {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.dialog__presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.preset-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px;
+  border-radius: 10px;
+  border: 1px solid #383741;
+  background: #26252c;
+  color: #eceaf0;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.preset-btn:active {
+  background: #322f3a;
+}
+
+.preset-btn__swatch {
+  border: 1.5px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.preset-btn__dims {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.dialog__custom {
+  border-top: 1px solid #302f36;
+  padding-top: 14px;
+}
+
+.dialog__custom-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dialog__custom-row input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  background: #26252c;
+  border: 1px solid #383741;
+  border-radius: 8px;
+  color: #eceaf0;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.dialog__custom-row span {
+  opacity: 0.5;
+  font-size: 13px;
+}
+
+.dialog__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.dialog__actions button {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #383741;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.dialog__actions .btn-primary {
+  background: #7a1f2b;
+  color: #fff;
+  border-color: #7a1f2b;
+}
+
+.dialog__actions .btn-secondary {
+  background: #26252c;
+  color: #eceaf0;
 }

@@ -31,8 +31,18 @@ export class PaintEngine {
   private readonly MAX_UNDO_SNAPSHOTS = 20;
 
   private dpr = Math.max(1, window.devicePixelRatio || 1);
+  // "logical" size: the coordinate space strokes are recorded/rendered in.
+  // Equals the on-screen viewport unless a fixed canvas size is chosen, in
+  // which case the canvas is displayed scaled-to-fit but strokes/backing
+  // store still use these exact logical dimensions.
   private cssW = 0;
   private cssH = 0;
+  private frame: HTMLDivElement;
+  private fixedSize: { w: number; h: number } | null = null;
+  // backing-store pixels per logical pixel: devicePixelRatio when filling the
+  // screen (for crisp rendering), or exactly 1 for a fixed size so exports
+  // come out at precisely the requested pixel dimensions.
+  private backingScale = this.dpr;
 
   color = "#7a1f2b";
   size = 34;
@@ -43,6 +53,9 @@ export class PaintEngine {
     this.root = document.createElement("div");
     this.root.className = "paint-stack";
 
+    this.frame = document.createElement("div");
+    this.frame.className = "canvas-frame";
+
     this.bgCanvas = document.createElement("canvas");
     this.bgCanvas.className = "paint-layer";
     this.paintCanvas = document.createElement("canvas");
@@ -50,7 +63,8 @@ export class PaintEngine {
     this.overlayCanvas = document.createElement("canvas");
     this.overlayCanvas.className = "paint-layer paint-layer--overlay";
 
-    this.root.append(this.bgCanvas, this.paintCanvas, this.overlayCanvas);
+    this.frame.append(this.bgCanvas, this.paintCanvas, this.overlayCanvas);
+    this.root.append(this.frame);
     container.appendChild(this.root);
 
     this.paintCtx = this.paintCanvas.getContext("2d")!;
@@ -64,18 +78,50 @@ export class PaintEngine {
 
   private resize() {
     const rect = this.root.getBoundingClientRect();
-    this.cssW = rect.width;
-    this.cssH = rect.height;
+    let displayW: number;
+    let displayH: number;
+
+    if (this.fixedSize) {
+      const { w, h } = this.fixedSize;
+      const fitScale = Math.min(rect.width / w, rect.height / h);
+      displayW = w * fitScale;
+      displayH = h * fitScale;
+      this.cssW = w;
+      this.cssH = h;
+      this.backingScale = 1;
+    } else {
+      displayW = rect.width;
+      displayH = rect.height;
+      this.cssW = rect.width;
+      this.cssH = rect.height;
+      this.backingScale = this.dpr;
+    }
+
+    this.frame.style.width = `${displayW}px`;
+    this.frame.style.height = `${displayH}px`;
+
     for (const c of [this.bgCanvas, this.paintCanvas, this.overlayCanvas]) {
-      c.width = Math.round(this.cssW * this.dpr);
-      c.height = Math.round(this.cssH * this.dpr);
+      c.width = Math.round(this.cssW * this.backingScale);
+      c.height = Math.round(this.cssH * this.backingScale);
     }
     this.redrawAll();
   }
 
+  // Starts a fresh canvas. Pass w/h to fix the canvas to that exact pixel
+  // resolution (displayed scaled-to-fit); omit both to fill the screen.
+  newCanvas(w?: number, h?: number) {
+    this.fixedSize = w && h ? { w, h } : null;
+    this.strokes = [];
+    this.redoStack = [];
+    this.undoSnapshots = [];
+    this.pendingSnapshot = null;
+    this.resize();
+    this.onHistoryChange?.();
+  }
+
   private redrawAll() {
     const bgCtx = this.bgCanvas.getContext("2d")!;
-    bgCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    bgCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
     paintGrainBackground(bgCtx, this.cssW, this.cssH, this.grainTile, PAPER_COLOR);
 
     const ovCtx = this.overlayCanvas.getContext("2d")!;
@@ -91,7 +137,7 @@ export class PaintEngine {
       ovCtx.globalCompositeOperation = "source-over";
     }
 
-    this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
     this.paintCtx.clearRect(0, 0, this.cssW, this.cssH);
     for (const stroke of this.strokes) {
       renderStroke(this.paintCtx, stroke);
@@ -115,7 +161,7 @@ export class PaintEngine {
     this.paintCtx.setTransform(1, 0, 0, 1, 0, 0);
     this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
     this.paintCtx.drawImage(snap, 0, 0);
-    this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
   }
 
   private bindPointerEvents() {
@@ -174,7 +220,9 @@ export class PaintEngine {
 
   private toLocal(e: PointerEvent): StrokePoint {
     const rect = this.paintCanvas.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top, t: e.timeStamp };
+    const scaleX = this.cssW / rect.width;
+    const scaleY = this.cssH / rect.height;
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY, t: e.timeStamp };
   }
 
   undo() {
@@ -201,7 +249,7 @@ export class PaintEngine {
     if (!s) return;
 
     const snap = this.snapshotCanvas();
-    this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
     renderStroke(this.paintCtx, s);
 
     this.strokes.push(s);

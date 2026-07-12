@@ -1,6 +1,7 @@
 import { PALETTE } from "./palette";
 import type { PaintEngine } from "../engine/paintEngine";
 import { exportPng } from "../export/png";
+import { openNewCanvasDialog } from "./newCanvasDialog";
 
 export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   const bar = document.createElement("div");
@@ -92,6 +93,16 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
     }
   });
 
+  const newCanvasBtn = document.createElement("button");
+  newCanvasBtn.className = "icon-btn";
+  newCanvasBtn.textContent = "▦";
+  newCanvasBtn.setAttribute("aria-label", "new canvas");
+  newCanvasBtn.addEventListener("click", () => {
+    const proceed = !engine.canUndo() || confirm("Start a new canvas? This will discard your current painting.");
+    if (!proceed) return;
+    openNewCanvasDialog((w, h) => engine.newCanvas(w, h));
+  });
+
   const exportBtn = document.createElement("button");
   exportBtn.className = "icon-btn";
   exportBtn.textContent = "⇧";
@@ -100,7 +111,7 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
     exportPng(engine.exportCanvas());
   });
 
-  actions.append(undoBtn, redoBtn, clearBtn, exportBtn);
+  actions.append(newCanvasBtn, undoBtn, redoBtn, clearBtn, exportBtn);
 
   function refreshHistoryButtons() {
     undoBtn.disabled = !engine.canUndo();
