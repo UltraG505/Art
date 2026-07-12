@@ -48,7 +48,9 @@ export class PaintEngine {
   // come out at precisely the requested pixel dimensions.
   private backingScale = this.dpr;
 
-  color = "#7a1f2b";
+  // active color loadout (1-3 colors); multi-color brushes carry all of them
+  // in one stroke, single-color brushes use colors[0]
+  colors: string[] = ["#7a1f2b"];
   size = 34;
   brush: BrushId = "wetBlend";
   bg = DEFAULT_BG;
@@ -222,17 +224,19 @@ export class PaintEngine {
       // the canvas is screen-sized or a 2000px fixed canvas shown scaled down
       const rect = this.paintCanvas.getBoundingClientRect();
       const resolvedSize = this.size * (this.cssW / rect.width);
+      const strokeColors = this.colors.length > 0 ? [...this.colors] : ["#7a1f2b"];
       this.current = {
         id: crypto.randomUUID(),
         brush: this.brush,
-        color: this.color,
+        color: strokeColors[0],
+        colors: strokeColors,
         size: resolvedSize,
         seed,
         points: [p],
       };
       this.liveBrush = getBrush(this.brush);
-      this.liveState = this.liveBrush.init(this.color);
       this.liveRand = mulberry32(seed);
+      this.liveState = this.liveBrush.init(strokeColors, this.liveRand);
       this.redoStack = [];
       this.pendingSnapshot = this.snapshotCanvas();
     });
@@ -277,11 +281,13 @@ export class PaintEngine {
     });
   }
 
-  private toLocal(e: { clientX: number; clientY: number; timeStamp: number }): StrokePoint {
+  private toLocal(e: { clientX: number; clientY: number; timeStamp: number; pressure?: number }): StrokePoint {
     const rect = this.paintCanvas.getBoundingClientRect();
     const scaleX = this.cssW / rect.width;
     const scaleY = this.cssH / rect.height;
-    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY, t: e.timeStamp };
+    // pressure 0 means "not reported" on most hardware; treat as neutral
+    const pr = e.pressure && e.pressure > 0 ? e.pressure : 0.5;
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY, t: e.timeStamp, pr };
   }
 
   undo() {

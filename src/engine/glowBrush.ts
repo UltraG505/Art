@@ -22,17 +22,19 @@ function makeGlowStamp(color: string, coreStop: number, alpha: number): HTMLCanv
 }
 
 interface GlowState {
-  halo: HTMLCanvasElement;
+  halos: HTMLCanvasElement[];
   core: HTMLCanvasElement;
   avgSpeed: number;
+  haloIndex: number;
 }
 
 export const glowBrush: BrushImpl = {
-  init(color: string): GlowState {
+  init(colors): GlowState {
     return {
-      halo: makeGlowStamp(color, 0.05, 0.14),
+      halos: colors.map((c) => makeGlowStamp(c, 0.05, 0.14)),
       core: makeGlowStamp("#ffffff", 0.1, 0.5),
       avgSpeed: -1,
+      haloIndex: 0,
     };
   },
 
@@ -51,8 +53,10 @@ export const glowBrush: BrushImpl = {
     // moving fast stretches the light thin and dim, like a quick swing of a
     // torch in a long exposure; lingering burns a hot bright spot
     const speedFactor = Math.min(1, speed / 1.5);
-    const haloD = size * 2.1 * (1 - 0.4 * speedFactor);
-    const coreD = size * 0.5 * (1 - 0.45 * speedFactor);
+    const pr = ((prev.pr ?? 0.5) + (cur.pr ?? 0.5)) / 2;
+    const prMul = 0.6 + pr * 0.8;
+    const haloD = size * 2.1 * (1 - 0.4 * speedFactor) * prMul;
+    const coreD = size * 0.5 * (1 - 0.45 * speedFactor) * prMul;
     const intensity = 1 - 0.55 * speedFactor;
 
     const spacing = Math.max(1.5, size * 0.1);
@@ -64,8 +68,12 @@ export const glowBrush: BrushImpl = {
       const t = s / steps;
       const px = prev.x + dx * t;
       const py = prev.y + dy * t;
+      // with a multi-color loadout the halo hue cycles slowly along the
+      // trail, like an aurora shifting color
+      const halo = state.halos[Math.floor(state.haloIndex / 6) % state.halos.length];
+      state.haloIndex++;
       ctx.globalAlpha = intensity;
-      ctx.drawImage(state.halo, px - haloD / 2, py - haloD / 2, haloD, haloD);
+      ctx.drawImage(halo, px - haloD / 2, py - haloD / 2, haloD, haloD);
       ctx.globalAlpha = intensity * 0.8;
       ctx.drawImage(state.core, px - coreD / 2, py - coreD / 2, coreD, coreD);
     }

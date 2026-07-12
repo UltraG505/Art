@@ -2,6 +2,7 @@ import "./style.css";
 import { PaintEngine } from "./engine/paintEngine";
 import { buildToolbar } from "./ui/toolbar";
 import { saveCurrent, loadCurrent } from "./engine/persist";
+import { openSketchbook } from "./ui/sketchbook";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -32,4 +33,9 @@ loadCurrent()
       engine.loadDoc(doc);
     }
   })
-  .catch(() => {});
+  .catch(() => {})
+  .finally(() => {
+    // the sketchbook is the home screen: browse saved pages, then close it
+    // (or hit "Continue painting") to land on the canvas
+    openSketchbook(engine);
+  });

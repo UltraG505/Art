@@ -17,7 +17,6 @@ function getSpeckleMask(): HTMLCanvasElement {
   const cx = STAMP_SIZE / 2;
   const r = STAMP_SIZE * 0.46;
   for (let i = 0; i < 340; i++) {
-    // uniform in disc, biased slightly to center via sqrt-less radius draw
     const a = rand() * Math.PI * 2;
     const d = rand() * r;
     const x = cx + Math.cos(a) * d;
@@ -48,12 +47,12 @@ function tintedStamp(color: string): HTMLCanvasElement {
 }
 
 interface ChalkState {
-  stamp: HTMLCanvasElement;
+  stamps: HTMLCanvasElement[];
 }
 
 export const chalkBrush: BrushImpl = {
-  init(color: string): ChalkState {
-    return { stamp: tintedStamp(color) };
+  init(colors): ChalkState {
+    return { stamps: colors.map(tintedStamp) };
   },
 
   segment(ctx, rawState, rand, prev, cur, _color, size) {
@@ -67,7 +66,8 @@ export const chalkBrush: BrushImpl = {
     // chalk reads best thinner than the paint brush; fast flicks skip and
     // lighten like a real pastel dragged quickly across paper
     const speedFactor = Math.min(1, speed / 1.5);
-    const width = size * 0.55 * (1.05 - 0.3 * speedFactor);
+    const pr = ((prev.pr ?? 0.5) + (cur.pr ?? 0.5)) / 2;
+    const width = size * 0.55 * (1.05 - 0.3 * speedFactor) * (0.6 + pr * 0.8);
     const opacity = 0.75 - 0.4 * speedFactor;
 
     const spacing = Math.max(1.5, width * 0.22);
@@ -82,11 +82,15 @@ export const chalkBrush: BrushImpl = {
       const py = prev.y + dy * t + jy;
       const rot = rand() * Math.PI * 2;
       const scale = 0.85 + rand() * 0.3;
+      // only consume an extra rand when multi-colored, so strokes saved
+      // before loadouts existed still replay with identical jitter
+      const stamp =
+        state.stamps.length > 1 ? state.stamps[Math.floor(rand() * state.stamps.length)] : state.stamps[0];
       ctx.globalAlpha = opacity * (0.7 + rand() * 0.3);
       ctx.translate(px, py);
       ctx.rotate(rot);
       const d = width * scale;
-      ctx.drawImage(state.stamp, -d / 2, -d / 2, d, d);
+      ctx.drawImage(stamp, -d / 2, -d / 2, d, d);
       ctx.rotate(-rot);
       ctx.translate(-px, -py);
     }

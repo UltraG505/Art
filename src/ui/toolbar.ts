@@ -3,12 +3,15 @@ import type { PaintEngine } from "../engine/paintEngine";
 import type { BrushId } from "../engine/types";
 import { exportPng } from "../export/png";
 import { openNewCanvasDialog } from "./newCanvasDialog";
-import { openGalleryPanel } from "./galleryPanel";
+import { openSketchbook } from "./sketchbook";
 
 const BRUSH_OPTIONS: { id: BrushId; label: string; title: string }[] = [
   { id: "wetBlend", label: "Paint", title: "wet paint - blends with color underneath" },
+  { id: "flow", label: "Flow", title: "curvy streaked strokes with bristle ridges" },
   { id: "chalk", label: "Chalk", title: "dry pastel - grainy scribble marks" },
   { id: "glow", label: "Glow", title: "light trail - best on a black canvas" },
+  { id: "ink", label: "Ink", title: "thin pen line for details" },
+  { id: "smudge", label: "Smudge", title: "no color - drags the paint already there" },
 ];
 
 export function buildToolbar(engine: PaintEngine): HTMLDivElement {
@@ -37,16 +40,71 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   const divider0 = document.createElement("div");
   divider0.className = "toolbar__divider";
 
+  // color loadout: up to three slots painted in one stroke by multi-color
+  // brushes. Tap a slot to select it, tap a palette color to fill it; tap an
+  // already-selected extra slot to empty it.
+  const slots: (string | null)[] = [engine.colors[0] ?? PALETTE[0], null, null];
+  let activeSlot = 0;
+
+  const slotWrap = document.createElement("div");
+  slotWrap.className = "toolbar__slots";
+  const slotButtons: HTMLButtonElement[] = [];
+
+  function syncEngine() {
+    engine.colors = slots.filter((c): c is string => c !== null);
+  }
+
+  function renderSlots() {
+    slotButtons.forEach((b, i) => {
+      const c = slots[i];
+      b.classList.toggle("is-empty", c === null);
+      b.classList.toggle("is-active", i === activeSlot);
+      b.style.background = c ?? "transparent";
+      b.textContent = c === null ? "+" : "";
+    });
+  }
+
+  for (let i = 0; i < 3; i++) {
+    const b = document.createElement("button");
+    b.className = "color-slot";
+    b.setAttribute("aria-label", `color slot ${i + 1}`);
+    b.addEventListener("click", () => {
+      if (i === activeSlot && i > 0 && slots[i] !== null) {
+        // deselect + empty an extra slot
+        slots[i] = null;
+        activeSlot = 0;
+      } else {
+        if (slots[i] === null) slots[i] = slots[0];
+        activeSlot = i;
+      }
+      syncEngine();
+      renderSlots();
+      refreshSwatchRing();
+    });
+    slotButtons.push(b);
+    slotWrap.appendChild(b);
+  }
+
+  const divider0b = document.createElement("div");
+  divider0b.className = "toolbar__divider";
+
   const swatchWrap = document.createElement("div");
   swatchWrap.className = "toolbar__swatches";
 
   const swatchButtons: HTMLButtonElement[] = [];
-  function setActiveColor(color: string) {
-    engine.color = color;
+  function refreshSwatchRing() {
+    const activeColor = slots[activeSlot];
     for (const b of swatchButtons) {
-      b.classList.toggle("is-active", b.dataset.color === color);
+      b.classList.toggle("is-active", b.dataset.color === activeColor);
     }
-    customSwatch.classList.toggle("is-active", !PALETTE.includes(color));
+    customSwatch.classList.toggle("is-active", activeColor !== null && !PALETTE.includes(activeColor));
+  }
+
+  function setActiveColor(color: string) {
+    slots[activeSlot] = color;
+    syncEngine();
+    renderSlots();
+    refreshSwatchRing();
   }
 
   for (const color of PALETTE) {
@@ -65,12 +123,14 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   customSwatch.setAttribute("aria-label", "custom color");
   const colorInput = document.createElement("input");
   colorInput.type = "color";
-  colorInput.value = engine.color;
+  colorInput.value = slots[0]!;
   colorInput.addEventListener("input", () => setActiveColor(colorInput.value));
   customSwatch.appendChild(colorInput);
   swatchWrap.appendChild(customSwatch);
 
-  setActiveColor(engine.color);
+  syncEngine();
+  renderSlots();
+  refreshSwatchRing();
 
   const divider1 = document.createElement("div");
   divider1.className = "toolbar__divider";
@@ -84,7 +144,7 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   const sizeSlider = document.createElement("input");
   sizeSlider.type = "range";
   sizeSlider.min = "8";
-  sizeSlider.max = "80";
+  sizeSlider.max = "110";
   sizeSlider.value = String(engine.size);
   sizeSlider.addEventListener("input", () => {
     engine.size = Number(sizeSlider.value);
@@ -137,7 +197,7 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   galleryBtn.className = "icon-btn";
   galleryBtn.textContent = "▤";
   galleryBtn.setAttribute("aria-label", "gallery");
-  galleryBtn.addEventListener("click", () => openGalleryPanel(engine));
+  galleryBtn.addEventListener("click", () => openSketchbook(engine));
 
   const exportBtn = document.createElement("button");
   exportBtn.className = "icon-btn";
@@ -156,6 +216,6 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   engine.onHistory(refreshHistoryButtons);
   refreshHistoryButtons();
 
-  bar.append(brushWrap, divider0, swatchWrap, divider1, sizeWrap, divider2, actions);
+  bar.append(brushWrap, divider0, slotWrap, divider0b, swatchWrap, divider1, sizeWrap, divider2, actions);
   return bar;
 }
