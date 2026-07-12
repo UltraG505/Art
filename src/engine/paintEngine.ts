@@ -19,6 +19,17 @@ export class PaintEngine {
   private liveState: StampState | null = null;
   private liveRand: RandFn | null = null;
 
+  // Undo/redo would otherwise have to replay every stamp of every stroke
+  // ever drawn (renderStroke over the full `strokes` history), which gets
+  // slower the longer a session runs and eventually freezes the page. Instead
+  // we cache a raster snapshot of the canvas from just before each of the
+  // last MAX_UNDO_SNAPSHOTS strokes, so undo/redo is a single drawImage
+  // (or one single-stroke replay for redo) regardless of history length.
+  // Undoing further back than that falls back to a full replay.
+  private undoSnapshots: { stroke: Stroke; canvas: HTMLCanvasElement }[] = [];
+  private pendingSnapshot: HTMLCanvasElement | null = null;
+  private readonly MAX_UNDO_SNAPSHOTS = 20;
+
   private dpr = Math.max(1, window.devicePixelRatio || 1);
   private cssW = 0;
   private cssH = 0;
@@ -85,6 +96,26 @@ export class PaintEngine {
     for (const stroke of this.strokes) {
       renderStroke(this.paintCtx, stroke);
     }
+
+    // a full replay invalidates any snapshots (they're pixel copies at the
+    // pre-replay canvas size/content), so fast undo only resumes once new
+    // strokes are drawn after this
+    this.undoSnapshots = [];
+  }
+
+  private snapshotCanvas(): HTMLCanvasElement {
+    const snap = document.createElement("canvas");
+    snap.width = this.paintCanvas.width;
+    snap.height = this.paintCanvas.height;
+    snap.getContext("2d")!.drawImage(this.paintCanvas, 0, 0);
+    return snap;
+  }
+
+  private restoreSnapshot(snap: HTMLCanvasElement) {
+    this.paintCtx.setTransform(1, 0, 0, 1, 0, 0);
+    this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
+    this.paintCtx.drawImage(snap, 0, 0);
+    this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
   }
 
   private bindPointerEvents() {
@@ -106,6 +137,7 @@ export class PaintEngine {
       this.liveState = initStroke(this.color);
       this.liveRand = mulberry32(seed);
       this.redoStack = [];
+      this.pendingSnapshot = this.snapshotCanvas();
     });
 
     el.addEventListener("pointermove", (e) => {
@@ -123,6 +155,11 @@ export class PaintEngine {
         strokeSegment(this.paintCtx, this.liveState, this.liveRand!, p, p, this.current.color, this.current.size);
       }
       this.strokes.push(this.current);
+      if (this.pendingSnapshot) {
+        this.undoSnapshots.push({ stroke: this.current, canvas: this.pendingSnapshot });
+        if (this.undoSnapshots.length > this.MAX_UNDO_SNAPSHOTS) this.undoSnapshots.shift();
+      }
+      this.pendingSnapshot = null;
       this.current = null;
       this.liveState = null;
       this.liveRand = null;
@@ -141,26 +178,43 @@ export class PaintEngine {
   }
 
   undo() {
-    const s = this.strokes.pop();
-    if (s) {
+    const s = this.strokes[this.strokes.length - 1];
+    if (!s) return;
+
+    const top = this.undoSnapshots[this.undoSnapshots.length - 1];
+    if (top && top.stroke === s) {
+      this.undoSnapshots.pop();
+      this.strokes.pop();
+      this.redoStack.push(s);
+      this.restoreSnapshot(top.canvas);
+    } else {
+      // beyond the cached undo depth: fall back to a full replay
+      this.strokes.pop();
       this.redoStack.push(s);
       this.redrawAll();
-      this.onHistoryChange?.();
     }
+    this.onHistoryChange?.();
   }
 
   redo() {
     const s = this.redoStack.pop();
-    if (s) {
-      this.strokes.push(s);
-      this.redrawAll();
-      this.onHistoryChange?.();
-    }
+    if (!s) return;
+
+    const snap = this.snapshotCanvas();
+    this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    renderStroke(this.paintCtx, s);
+
+    this.strokes.push(s);
+    this.undoSnapshots.push({ stroke: s, canvas: snap });
+    if (this.undoSnapshots.length > this.MAX_UNDO_SNAPSHOTS) this.undoSnapshots.shift();
+    this.onHistoryChange?.();
   }
 
   clear() {
     this.strokes = [];
     this.redoStack = [];
+    this.undoSnapshots = [];
+    this.pendingSnapshot = null;
     this.redrawAll();
     this.onHistoryChange?.();
   }
