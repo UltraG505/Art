@@ -577,6 +577,15 @@ input[type="range"] {
   z-index: 2;
 }
 
+.library__error {
+  grid-column: 1 / -1;
+  color: rgba(232, 223, 201, 0.65);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+  padding: 20px 8px;
+}
+
 .library__paint {
   margin-top: 26px;
   padding: 13px 26px;

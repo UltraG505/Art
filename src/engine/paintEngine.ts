@@ -39,6 +39,20 @@ export class PaintEngine {
   private undoSnapshots: { stroke: Stroke; canvas: HTMLCanvasElement }[] = [];
   private pendingSnapshot: HTMLCanvasElement | null = null;
 
+  // "Baking": once the stroke history grows past BAKE_TRIGGER, everything
+  // older than the undo-snapshot window is flattened into this raster and
+  // dropped from strokes[]. Every redraw is then base image + a small tail
+  // of recent strokes, so no code path ever replays an unbounded history
+  // (which is what froze the app on boot and on undo in long sessions).
+  private baseImage: HTMLCanvasElement | null = null;
+  private baseBlob: Blob | null = null;
+  private bakeGen = 0;
+  // strokes already baked into baseImage whose PNG hasn't finished encoding;
+  // autosave keeps carrying them so a crash in that window loses nothing
+  private bakedPending: Stroke[] = [];
+  private restoring = false;
+  private static readonly BAKE_TRIGGER = 40;
+
   private dpr = Math.max(1, window.devicePixelRatio || 1);
   private lastRootW = -1;
   private lastRootH = -1;
@@ -160,27 +174,124 @@ export class PaintEngine {
     this.redoStack = [];
     this.undoSnapshots = [];
     this.pendingSnapshot = null;
+    this.baseImage = null;
+    this.baseBlob = null;
+    this.bakedPending = [];
+    this.bakeGen++;
     this.resize();
     this.emitHistory();
   }
 
   getDoc(): PaintingDoc {
-    return { v: 1, strokes: this.strokes, fixedSize: this.fixedSize, bg: this.bg };
+    return {
+      v: 2,
+      strokes: [...this.bakedPending, ...this.strokes],
+      fixedSize: this.fixedSize,
+      bg: this.bg,
+      basePng: this.baseBlob ?? undefined,
+    };
   }
 
-  loadDoc(doc: PaintingDoc) {
-    this.fixedSize = doc.fixedSize;
-    this.bg = doc.bg || DEFAULT_BG;
-    this.strokes = doc.strokes ?? [];
-    this.redoStack = [];
-    this.undoSnapshots = [];
-    this.pendingSnapshot = null;
-    this.resize();
+  // Restores a saved session without freezing the UI: the baked base image
+  // draws in one blit, then any remaining strokes replay in small batches
+  // yielded across frames (matters for v1 docs, which are strokes-only).
+  // Afterwards everything is re-baked, so the next boot is a single blit.
+  async loadDoc(doc: PaintingDoc): Promise<void> {
+    this.restoring = true;
+    try {
+      this.fixedSize = doc.fixedSize;
+      this.bg = doc.bg || DEFAULT_BG;
+      this.strokes = [];
+      this.redoStack = [];
+      this.undoSnapshots = [];
+      this.pendingSnapshot = null;
+      this.baseImage = null;
+      this.baseBlob = null;
+      this.bakedPending = [];
+      this.bakeGen++;
+      this.resize();
+
+      if (doc.basePng) {
+        try {
+          const bmp = await createImageBitmap(doc.basePng);
+          const c = document.createElement("canvas");
+          c.width = bmp.width;
+          c.height = bmp.height;
+          c.getContext("2d")!.drawImage(bmp, 0, 0);
+          bmp.close();
+          this.baseImage = c;
+          this.baseBlob = doc.basePng;
+          this.drawBase();
+        } catch {
+          // corrupt base: fall back to whatever strokes we have
+        }
+      }
+
+      const pending = doc.strokes ?? [];
+      const BATCH = 6;
+      for (let i = 0; i < pending.length; i += BATCH) {
+        this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
+        for (const stroke of pending.slice(i, i + BATCH)) {
+          renderStroke(this.paintCtx, stroke);
+        }
+        if (i + BATCH < pending.length) {
+          await new Promise((r) => requestAnimationFrame(r));
+        }
+      }
+
+      if (pending.length > 0) this.bakeAll(pending);
+    } finally {
+      this.restoring = false;
+    }
     this.emitHistory();
   }
 
+  private drawBase() {
+    if (!this.baseImage) return;
+    this.paintCtx.setTransform(1, 0, 0, 1, 0, 0);
+    this.paintCtx.drawImage(this.baseImage, 0, 0, this.paintCanvas.width, this.paintCanvas.height);
+    this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
+  }
+
+  // flatten the whole current paint layer into the base image; `carried`
+  // rides in bakedPending until the PNG encode lands so autosave never has
+  // a window where those strokes exist in neither place
+  private bakeAll(carried: Stroke[]) {
+    this.baseImage = this.snapshotCanvas();
+    this.bakedPending = [...this.bakedPending, ...carried];
+    this.strokes = [];
+    this.undoSnapshots = [];
+    this.encodeBase();
+  }
+
+  private encodeBase() {
+    if (!this.baseImage) return;
+    const gen = ++this.bakeGen;
+    this.baseImage.toBlob((b) => {
+      if (b && gen === this.bakeGen) {
+        this.baseBlob = b;
+        this.bakedPending = [];
+      }
+    }, "image/png");
+  }
+
+  // once the tail outgrows the trigger, everything older than the oldest
+  // undo snapshot flattens into the base (undo depth is preserved exactly -
+  // you can't undo past a snapshot any faster than a full replay anyway)
+  private maybeBake() {
+    if (this.strokes.length <= PaintEngine.BAKE_TRIGGER || this.undoSnapshots.length === 0) return;
+    const oldest = this.undoSnapshots[0];
+    const idx = this.strokes.findIndex((s) => s.id === oldest.stroke.id);
+    if (idx <= 0) return;
+    const baked = this.strokes.slice(0, idx);
+    this.baseImage = oldest.canvas;
+    this.strokes = this.strokes.slice(idx);
+    this.bakedPending = [...this.bakedPending, ...baked];
+    this.encodeBase();
+  }
+
   hasContent(): boolean {
-    return this.strokes.length > 0;
+    return this.strokes.length > 0 || this.baseImage !== null;
   }
 
   private redrawAll() {
@@ -203,6 +314,7 @@ export class PaintEngine {
 
     this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
     this.paintCtx.clearRect(0, 0, this.cssW, this.cssH);
+    this.drawBase();
     for (const stroke of this.strokes) {
       renderStroke(this.paintCtx, stroke);
     }
@@ -233,6 +345,7 @@ export class PaintEngine {
     el.style.touchAction = "none";
 
     el.addEventListener("pointerdown", (e) => {
+      if (this.restoring) return;
       el.setPointerCapture(e.pointerId);
       const p = this.toLocal(e);
       const seed = Math.floor(Math.random() * 2 ** 31);
@@ -290,6 +403,7 @@ export class PaintEngine {
       this.liveBrush = null;
       this.liveState = null;
       this.liveRand = null;
+      this.maybeBake();
       this.emitHistory();
     };
     el.addEventListener("pointerup", finish);
@@ -345,6 +459,10 @@ export class PaintEngine {
     this.redoStack = [];
     this.undoSnapshots = [];
     this.pendingSnapshot = null;
+    this.baseImage = null;
+    this.baseBlob = null;
+    this.bakedPending = [];
+    this.bakeGen++;
     this.redrawAll();
     this.emitHistory();
   }

@@ -21,15 +21,16 @@ export interface Stroke {
   points: StrokePoint[];
 }
 
-// Everything needed to reconstruct the CURRENT painting session: the stroke
-// history plus the canvas settings the strokes were recorded against. Only
-// the in-progress canvas uses this; finished pieces are stored as flat
-// images so viewing them never triggers a stroke replay.
+// Everything needed to reconstruct the CURRENT painting session. Older
+// strokes get baked into basePng (a flat raster of the paint layer) so that
+// restoring never replays an unbounded stroke history - strokes[] only holds
+// the recent, unbaked tail. v1 docs (strokes only) still load, progressively.
 export interface PaintingDoc {
-  v: 1;
+  v: 1 | 2;
   strokes: Stroke[];
   fixedSize: { w: number; h: number } | null;
   bg: string;
+  basePng?: Blob;
 }
 
 export interface Book {

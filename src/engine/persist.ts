@@ -8,6 +8,15 @@ let dbPromise: Promise<IDBDatabase> | null = null;
 function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
+    // if an old tab/PWA process still holds the previous schema version open,
+    // the upgrade blocks INDEFINITELY and every storage call at boot hangs
+    // with it - never let that freeze the app; fail after a timeout and let
+    // painting work without persistence (a retry happens on the next call)
+    const timeout = setTimeout(() => {
+      dbPromise = null;
+      reject(new Error("IndexedDB open timed out (old app version still open?)"));
+    }, 4000);
+
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -15,8 +24,19 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("gallery")) db.createObjectStore("gallery", { keyPath: "id" });
       if (!db.objectStoreNames.contains("books")) db.createObjectStore("books", { keyPath: "id" });
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      clearTimeout(timeout);
+      const db = req.result;
+      // if a future version wants to upgrade while we're open, close so we
+      // don't become the blocker for the new tab
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    req.onerror = () => {
+      clearTimeout(timeout);
+      dbPromise = null;
+      reject(req.error);
+    };
   });
   return dbPromise;
 }

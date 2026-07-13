@@ -38,15 +38,14 @@ engine.onHistory(() => {
   }, 500);
 });
 
+// the library is the home screen; open it immediately so boot never waits
+// on storage, and restore the working canvas behind it (progressively, so a
+// large session can't freeze the UI)
+openLibrary(engine);
 loadCurrent()
-  .then((doc) => {
-    if (doc && (doc.strokes?.length || doc.fixedSize)) {
-      engine.loadDoc(doc);
+  .then(async (doc) => {
+    if (doc && (doc.strokes?.length || doc.basePng || doc.fixedSize)) {
+      await engine.loadDoc(doc);
     }
   })
-  .catch(() => {})
-  .finally(() => {
-    // the library is the home screen: browse your sketchbooks, then close
-    // it (or hit "Continue painting") to land on the canvas
-    openLibrary(engine);
-  });
+  .catch(() => {});

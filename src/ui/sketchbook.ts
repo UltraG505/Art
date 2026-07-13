@@ -51,7 +51,20 @@ export async function openLibrary(engine: PaintEngine) {
   document.body.appendChild(overlay);
 
   async function renderShelf() {
-    const books = await listBooks();
+    let books;
+    try {
+      books = await listBooks();
+    } catch {
+      // storage unavailable (blocked upgrade, private mode) - the library
+      // can't render, but painting must stay reachable
+      shelf.innerHTML = "";
+      const err = document.createElement("p");
+      err.className = "library__error";
+      err.textContent =
+        "Couldn't open your library storage. If you have this app open in another tab, close it and reopen. You can still paint.";
+      shelf.appendChild(err);
+      return;
+    }
     shelf.innerHTML = "";
 
     for (const book of books) {
