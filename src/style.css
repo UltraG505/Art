@@ -34,6 +34,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .canvas-frame {
@@ -56,12 +57,23 @@ body {
 .toolbar {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   background: #1e1d23;
   border-top: 1px solid #302f36;
+}
+
+.toolbar__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.toolbar__row::-webkit-scrollbar {
+  display: none;
 }
 
 .toolbar__brushes {
@@ -154,6 +166,7 @@ input[type="range"] {
   gap: 6px;
   flex: 0 0 auto;
   margin-left: auto;
+  padding-left: 8px;
 }
 
 .icon-btn {
@@ -328,7 +341,14 @@ input[type="range"] {
 
 .toolbar__slots {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+.color-slot-holder {
+  position: relative;
+  display: inline-flex;
   flex: 0 0 auto;
 }
 
@@ -352,6 +372,268 @@ input[type="range"] {
 .color-slot.is-active {
   border-color: #fff;
   transform: scale(1.15);
+}
+
+.color-slot-clear {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid #1e1d23;
+  background: #514e5c;
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+/* ---- custom color picker ---- */
+
+.picker-pad-wrap {
+  position: relative;
+  margin-bottom: 14px;
+}
+
+.picker-pad {
+  width: 100%;
+  height: 180px;
+  display: block;
+  border-radius: 10px;
+  cursor: crosshair;
+}
+
+.picker-pad-cursor {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.picker-hue {
+  width: 100%;
+  height: 22px;
+  margin: 0 0 14px;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 11px;
+  background: linear-gradient(
+    to right,
+    #f00 0%,
+    #ff0 17%,
+    #0f0 33%,
+    #0ff 50%,
+    #00f 67%,
+    #f0f 83%,
+    #f00 100%
+  );
+}
+
+.picker-hue::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid #1e1d23;
+  cursor: pointer;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.picker-preview {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  flex: 0 0 auto;
+}
+
+.picker-hex {
+  flex: 1;
+  min-width: 0;
+  background: #26252c;
+  border: 1px solid #383741;
+  border-radius: 8px;
+  color: #eceaf0;
+  padding: 10px 12px;
+  font-size: 15px;
+  font-family: ui-monospace, monospace;
+}
+
+/* ---- library ---- */
+
+.library {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: radial-gradient(ellipse at 50% 30%, #2b2833, #141318 75%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: calc(20px + env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+.library__title {
+  color: #e8dfc9;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  margin: 14px 0 22px;
+}
+
+.library__shelf {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.library__book {
+  position: relative;
+}
+
+.library__cover {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border: none;
+  border-radius: 4px 10px 10px 4px;
+  background:
+    linear-gradient(to right, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0) 9%),
+    linear-gradient(135deg, #4a2530, #2c161d 70%);
+  color: #e8dfc9;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+}
+
+.library__book:nth-child(2n) .library__cover {
+  background:
+    linear-gradient(to right, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0) 9%),
+    linear-gradient(135deg, #2c3a4a, #16202c 70%);
+}
+
+.library__book:nth-child(3n) .library__cover {
+  background:
+    linear-gradient(to right, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0) 9%),
+    linear-gradient(135deg, #3a4a2c, #202c16 70%);
+}
+
+.library__cover--new {
+  background: none;
+  border: 2px dashed rgba(232, 223, 201, 0.3);
+  color: rgba(232, 223, 201, 0.6);
+  box-shadow: none;
+  font-size: 14px;
+}
+
+.library__cover-title {
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  word-break: break-word;
+}
+
+.library__cover-count {
+  font-size: 11px;
+  opacity: 0.55;
+  letter-spacing: 0.1em;
+}
+
+.library__del {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid #4a4855;
+  background: #26252c;
+  color: #cfcad2;
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.library__paint {
+  margin-top: 26px;
+  padding: 13px 26px;
+  border-radius: 12px;
+  border: none;
+  background: #7a1f2b;
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+/* ---- full-screen viewer ---- */
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(8, 7, 10, 0.94);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 20px;
+}
+
+.viewer__img {
+  max-width: 100%;
+  max-height: 74vh;
+  border-radius: 6px;
+  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+}
+
+.viewer__bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.page-art--tappable {
+  cursor: pointer;
+}
+
+.sketchbook__back {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  left: 14px;
+  z-index: 200;
+  padding: 10px 14px;
+  border-radius: 21px;
+  border: 1px solid #4a4855;
+  background: #26252c;
+  color: #eceaf0;
+  font-size: 14px;
+  cursor: pointer;
 }
 
 /* ---- sketchbook ---- */

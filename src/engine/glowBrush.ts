@@ -60,7 +60,7 @@ export const glowBrush: BrushImpl = {
     const intensity = 1 - 0.55 * speedFactor;
 
     const spacing = Math.max(1.5, size * 0.1);
-    const steps = Math.max(1, Math.round(dist / spacing));
+    const steps = Math.min(48, Math.max(1, Math.round(dist / spacing)));
 
     ctx.save();
     ctx.globalCompositeOperation = "lighter";

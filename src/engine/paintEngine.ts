@@ -26,6 +26,10 @@ export class PaintEngine {
   private liveBrush: BrushImpl | null = null;
   private liveState: unknown = null;
   private liveRand: RandFn | null = null;
+  // input thinning: drop move samples closer than ~1 screen pixel. Coalesced
+  // events on 120Hz panels otherwise flood slow strokes with near-duplicate
+  // points that cost full stamp batches each but add nothing visible.
+  private liveMinDist = 1;
 
   // Undo/redo would otherwise have to replay every stamp of every stroke
   // ever drawn, which gets slower the longer a session runs. Instead we cache
@@ -36,6 +40,8 @@ export class PaintEngine {
   private pendingSnapshot: HTMLCanvasElement | null = null;
 
   private dpr = Math.max(1, window.devicePixelRatio || 1);
+  private lastRootW = -1;
+  private lastRootH = -1;
   // "logical" size: the coordinate space strokes are recorded/rendered in.
   // Equals the on-screen viewport unless a fixed canvas size is chosen, in
   // which case the canvas is displayed scaled-to-fit but strokes/backing
@@ -79,7 +85,16 @@ export class PaintEngine {
     this.grainTile = createGrainTile();
 
     this.resize();
-    window.addEventListener("resize", () => this.resize());
+    // watch the container itself, not the window: the toolbar mounts after
+    // the engine and changes the available height, and window resize never
+    // fires for that - a stale size left the canvas overlapping the toolbar
+    const ro = new ResizeObserver(() => {
+      const rect = this.root.getBoundingClientRect();
+      if (Math.abs(rect.width - this.lastRootW) > 0.5 || Math.abs(rect.height - this.lastRootH) > 0.5) {
+        this.resize();
+      }
+    });
+    ro.observe(this.root);
 
     this.bindPointerEvents();
   }
@@ -105,6 +120,8 @@ export class PaintEngine {
 
   private resize() {
     const rect = this.root.getBoundingClientRect();
+    this.lastRootW = rect.width;
+    this.lastRootH = rect.height;
     let displayW: number;
     let displayH: number;
 
@@ -224,6 +241,7 @@ export class PaintEngine {
       // the canvas is screen-sized or a 2000px fixed canvas shown scaled down
       const rect = this.paintCanvas.getBoundingClientRect();
       const resolvedSize = this.size * (this.cssW / rect.width);
+      this.liveMinDist = this.cssW / rect.width;
       const strokeColors = this.colors.length > 0 ? [...this.colors] : ["#7a1f2b"];
       this.current = {
         id: crypto.randomUUID(),
@@ -251,7 +269,7 @@ export class PaintEngine {
       for (const ev of events) {
         const prev = this.current.points[this.current.points.length - 1];
         const p = this.toLocal(ev);
-        if (p.x === prev.x && p.y === prev.y) continue;
+        if (Math.hypot(p.x - prev.x, p.y - prev.y) < this.liveMinDist) continue;
         this.current.points.push(p);
         this.liveBrush.segment(this.paintCtx, this.liveState, this.liveRand, prev, p, this.current.color, this.current.size);
       }

@@ -137,8 +137,11 @@ function makeWetBrush(opts: WetOpts): BrushImpl {
       const width = size * opts.widthMul * (1.15 - 0.35 * speedFactor) * (0.6 + pr * 0.8);
       const opacity = opts.opacityBase - 0.35 * speedFactor;
 
-      const spacing = Math.max(2, width * 0.14);
-      const steps = Math.max(1, Math.round(dist / spacing));
+      // each stamp does a canvas readback (the pickup), which is the single
+      // most expensive operation in the app - cap the per-segment count so a
+      // fast flick can't queue hundreds of readbacks in one input event
+      const spacing = Math.max(2, width * 0.16);
+      const steps = Math.min(32, Math.max(1, Math.round(dist / spacing)));
       const angle = Math.atan2(dy, dx);
 
       for (let s = 1; s <= steps; s++) {

@@ -21,8 +21,10 @@ export interface Stroke {
   points: StrokePoint[];
 }
 
-// Everything needed to reconstruct a painting: the stroke history plus the
-// canvas settings the strokes were recorded against.
+// Everything needed to reconstruct the CURRENT painting session: the stroke
+// history plus the canvas settings the strokes were recorded against. Only
+// the in-progress canvas uses this; finished pieces are stored as flat
+// images so viewing them never triggers a stroke replay.
 export interface PaintingDoc {
   v: 1;
   strokes: Stroke[];
@@ -30,9 +32,20 @@ export interface PaintingDoc {
   bg: string;
 }
 
+export interface Book {
+  id: string;
+  title: string;
+  createdAt: number;
+}
+
 export interface GalleryItem {
   id: string;
-  thumb: string; // small JPEG data URL for the gallery grid
-  doc: PaintingDoc;
+  // which sketchbook this page belongs to; items saved before books existed
+  // lack it and get migrated to the first book
+  bookId?: string;
+  thumb: string; // small JPEG data URL for the page/thumbnail
+  // full-resolution PNG captured at save time; items saved before this
+  // existed only have the thumb (and possibly a legacy stroke doc, ignored)
+  blob?: Blob;
   updatedAt: number;
 }

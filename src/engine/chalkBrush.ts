@@ -71,7 +71,7 @@ export const chalkBrush: BrushImpl = {
     const opacity = 0.75 - 0.4 * speedFactor;
 
     const spacing = Math.max(1.5, width * 0.22);
-    const steps = Math.max(1, Math.round(dist / spacing));
+    const steps = Math.min(48, Math.max(1, Math.round(dist / spacing)));
 
     ctx.save();
     for (let s = 1; s <= steps; s++) {

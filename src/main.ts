@@ -2,7 +2,7 @@ import "./style.css";
 import { PaintEngine } from "./engine/paintEngine";
 import { buildToolbar } from "./ui/toolbar";
 import { saveCurrent, loadCurrent } from "./engine/persist";
-import { openSketchbook } from "./ui/sketchbook";
+import { openLibrary } from "./ui/sketchbook";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -14,17 +14,28 @@ const engine = new PaintEngine(canvasArea);
 const toolbar = buildToolbar(engine);
 app.appendChild(toolbar);
 
+// ask the browser not to evict our IndexedDB under storage pressure - the
+// library lives entirely on-device
+navigator.storage?.persist?.().catch(() => {});
+
 // Autosave the working painting so power cuts / app kills never lose work.
-// Debounced: history events fire per stroke, but serializing a large doc on
-// every single stroke while sketching fast would jank.
+// Debounced and deferred to idle time: serializing a large stroke doc on the
+// main thread mid-sketch is one of the things that caused visible freezes.
+const scheduleIdle: (cb: () => void) => void =
+  "requestIdleCallback" in window
+    ? (cb) => (window as Window & typeof globalThis).requestIdleCallback(() => cb(), { timeout: 2000 })
+    : (cb) => setTimeout(cb, 250);
+
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 engine.onHistory(() => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    saveCurrent(engine.getDoc()).catch(() => {
-      // storage unavailable (private mode, quota) - painting still works
+    scheduleIdle(() => {
+      saveCurrent(engine.getDoc()).catch(() => {
+        // storage unavailable (private mode, quota) - painting still works
+      });
     });
-  }, 400);
+  }, 500);
 });
 
 loadCurrent()
@@ -35,7 +46,7 @@ loadCurrent()
   })
   .catch(() => {})
   .finally(() => {
-    // the sketchbook is the home screen: browse saved pages, then close it
-    // (or hit "Continue painting") to land on the canvas
-    openSketchbook(engine);
+    // the library is the home screen: browse your sketchbooks, then close
+    // it (or hit "Continue painting") to land on the canvas
+    openLibrary(engine);
   });

@@ -1,6 +1,7 @@
 import type { PaintEngine } from "../engine/paintEngine";
-import type { GalleryItem } from "../engine/types";
-import { galleryAll, galleryPut, galleryDelete } from "../engine/persist";
+import type { GalleryItem, Book } from "../engine/types";
+import { galleryByBook, galleryPut, galleryDelete, listBooks, bookPut, bookDelete } from "../engine/persist";
+import { canvasToBlob, exportImagePng, exportImageJpg } from "../export/image";
 
 const THUMB_MAX = 480;
 
@@ -18,20 +19,173 @@ function fmtDate(ts: number): string {
   return new Date(ts).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
+// ---------------------------------------------------------------- library
+
+// The home screen: a shelf of sketchbooks. Tap one to flip through it,
+// make new ones, or close the library to paint.
+export async function openLibrary(engine: PaintEngine) {
+  if (document.querySelector(".library")) return;
+
+  const overlay = document.createElement("div");
+  overlay.className = "library";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "sketchbook__close";
+  closeBtn.textContent = "✕";
+  closeBtn.setAttribute("aria-label", "close library");
+  closeBtn.addEventListener("click", () => overlay.remove());
+
+  const title = document.createElement("h1");
+  title.className = "library__title";
+  title.textContent = "Library";
+
+  const shelf = document.createElement("div");
+  shelf.className = "library__shelf";
+
+  const paintBtn = document.createElement("button");
+  paintBtn.className = "library__paint";
+  paintBtn.textContent = "Continue painting";
+  paintBtn.addEventListener("click", () => overlay.remove());
+
+  overlay.append(closeBtn, title, shelf, paintBtn);
+  document.body.appendChild(overlay);
+
+  async function renderShelf() {
+    const books = await listBooks();
+    shelf.innerHTML = "";
+
+    for (const book of books) {
+      const counts = (await galleryByBook(book.id)).length;
+
+      const cell = document.createElement("div");
+      cell.className = "library__book";
+
+      const cover = document.createElement("button");
+      cover.className = "library__cover";
+      cover.setAttribute("aria-label", `open ${book.title}`);
+      const bt = document.createElement("div");
+      bt.className = "library__cover-title";
+      bt.textContent = book.title;
+      const bc = document.createElement("div");
+      bc.className = "library__cover-count";
+      bc.textContent = counts === 1 ? "1 page" : `${counts} pages`;
+      cover.append(bt, bc);
+      cover.addEventListener("click", async () => {
+        overlay.remove();
+        await openSketchbook(engine, book);
+      });
+
+      const del = document.createElement("button");
+      del.className = "library__del";
+      del.textContent = "✕";
+      del.setAttribute("aria-label", `delete ${book.title}`);
+      del.addEventListener("click", async () => {
+        if (!confirm(`Delete "${book.title}" and all ${counts} of its pages? This can't be undone.`)) return;
+        await bookDelete(book.id);
+        renderShelf();
+      });
+
+      cell.append(cover, del);
+      shelf.appendChild(cell);
+    }
+
+    const add = document.createElement("button");
+    add.className = "library__cover library__cover--new";
+    add.textContent = "＋ New sketchbook";
+    add.setAttribute("aria-label", "new sketchbook");
+    add.addEventListener("click", async () => {
+      const name = prompt("Name your sketchbook:", `Sketchbook ${(await listBooks()).length + 1}`);
+      if (!name) return;
+      await bookPut({ id: crypto.randomUUID(), title: name.trim().slice(0, 40), createdAt: Date.now() });
+      renderShelf();
+    });
+    shelf.appendChild(add);
+  }
+
+  await renderShelf();
+}
+
+// ----------------------------------------------------------------- viewer
+
+// Full-screen look at a saved piece with export options. Pieces are flat
+// images (no stroke replay), so opening one is instant.
+function openViewer(item: GalleryItem, onDelete: () => void) {
+  const overlay = document.createElement("div");
+  overlay.className = "viewer";
+
+  const img = document.createElement("img");
+  img.className = "viewer__img";
+  img.src = item.blob ? URL.createObjectURL(item.blob) : item.thumb;
+  img.alt = "saved painting";
+
+  const bar = document.createElement("div");
+  bar.className = "viewer__bar";
+
+  const src = () => item.blob ?? item.thumb;
+  const stamp = new Date(item.updatedAt).toISOString().slice(0, 10);
+
+  const pngBtn = document.createElement("button");
+  pngBtn.className = "page-btn page-btn--primary";
+  pngBtn.textContent = "Save PNG";
+  pngBtn.addEventListener("click", () => exportImagePng(src(), `painting-${stamp}.png`));
+
+  const jpgBtn = document.createElement("button");
+  jpgBtn.className = "page-btn page-btn--primary";
+  jpgBtn.textContent = "Save JPG";
+  jpgBtn.addEventListener("click", () => exportImageJpg(src(), `painting-${stamp}.jpg`));
+
+  const delBtn = document.createElement("button");
+  delBtn.className = "page-btn";
+  delBtn.textContent = "Delete";
+  delBtn.addEventListener("click", async () => {
+    if (!confirm("Delete this piece? This can't be undone.")) return;
+    await galleryDelete(item.id);
+    close();
+    onDelete();
+  });
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "page-btn";
+  closeBtn.textContent = "Close";
+  closeBtn.addEventListener("click", close);
+
+  bar.append(pngBtn, jpgBtn, delBtn, closeBtn);
+  overlay.append(img, bar);
+  document.body.appendChild(overlay);
+
+  function close() {
+    if (item.blob) URL.revokeObjectURL(img.src);
+    overlay.remove();
+  }
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+}
+
+// -------------------------------------------------------------- sketchbook
+
 interface Leaf {
   el: HTMLDivElement;
   turned: boolean;
 }
 
-// A tappable sketchbook: pages turn with a 3D flip. The book opens over the
-// canvas; closing it returns to painting. Cover first, one page per saved
-// piece (oldest first, like a book you fill), and the in-progress canvas as
-// the last page.
-export function openSketchbook(engine: PaintEngine) {
+// A tappable sketchbook: pages turn with a 3D flip. Cover first, one page
+// per saved piece (tap the art to view/export), and the in-progress canvas
+// as the last page.
+export async function openSketchbook(engine: PaintEngine, book: Book) {
   if (document.querySelector(".sketchbook")) return;
 
   const overlay = document.createElement("div");
   overlay.className = "sketchbook";
+
+  const backBtn = document.createElement("button");
+  backBtn.className = "sketchbook__back";
+  backBtn.textContent = "‹ Library";
+  backBtn.setAttribute("aria-label", "back to library");
+  backBtn.addEventListener("click", () => {
+    overlay.remove();
+    openLibrary(engine);
+  });
 
   const closeBtn = document.createElement("button");
   closeBtn.className = "sketchbook__close";
@@ -41,17 +195,17 @@ export function openSketchbook(engine: PaintEngine) {
 
   const hint = document.createElement("div");
   hint.className = "sketchbook__hint";
-  hint.textContent = "tap the page edges to turn";
+  hint.textContent = "tap the page edges to turn · tap a painting to view & export";
 
-  const book = document.createElement("div");
-  book.className = "book";
+  const bookEl = document.createElement("div");
+  bookEl.className = "book";
 
   const zoneL = document.createElement("div");
   zoneL.className = "book__zone book__zone--left";
   const zoneR = document.createElement("div");
   zoneR.className = "book__zone book__zone--right";
 
-  overlay.append(closeBtn, book, zoneL, zoneR, hint);
+  overlay.append(backBtn, closeBtn, bookEl, zoneL, zoneR, hint);
   document.body.appendChild(overlay);
 
   let leaves: Leaf[] = [];
@@ -69,7 +223,6 @@ export function openSketchbook(engine: PaintEngine) {
 
   function turnForward() {
     const leaf = leaves.find((l) => !l.turned);
-    // never turn the last page over - there'd be nothing beneath it
     if (!leaf || leaves.indexOf(leaf) === leaves.length - 1) return;
     leaf.turned = true;
     applyZ(leaf.el);
@@ -97,7 +250,7 @@ export function openSketchbook(engine: PaintEngine) {
     const back = document.createElement("div");
     back.className = "page__face page__face--back";
     el.append(front, back);
-    book.appendChild(el);
+    bookEl.appendChild(el);
     return { el, turned: false };
   }
 
@@ -106,7 +259,7 @@ export function openSketchbook(engine: PaintEngine) {
     f.classList.add("page__face--cover");
     const t = document.createElement("div");
     t.className = "cover-title";
-    t.textContent = "Abstract Studio";
+    t.textContent = book.title;
     const s = document.createElement("div");
     s.className = "cover-sub";
     s.textContent = "sketchbook";
@@ -114,47 +267,23 @@ export function openSketchbook(engine: PaintEngine) {
     return f;
   }
 
-  function itemFace(item: GalleryItem, rebuild: (turnedCount: number) => void, turnedCount: () => number): HTMLDivElement {
+  function itemFace(item: GalleryItem): HTMLDivElement {
     const f = document.createElement("div");
     const img = document.createElement("img");
-    img.className = "page-art";
+    img.className = "page-art page-art--tappable";
     img.src = item.thumb;
-    img.alt = "saved painting";
+    img.alt = "saved painting - tap to view";
+    img.addEventListener("click", () => openViewer(item, () => rebuild(turnedCount())));
 
     const caption = document.createElement("div");
     caption.className = "page-caption";
     caption.textContent = fmtDate(item.updatedAt);
 
-    const row = document.createElement("div");
-    row.className = "page-actions";
-
-    const openBtn = document.createElement("button");
-    openBtn.className = "page-btn page-btn--primary";
-    openBtn.textContent = "Open";
-    openBtn.addEventListener("click", () => {
-      const ok =
-        !engine.hasContent() ||
-        confirm("Open this piece? Your current canvas will be replaced (save it to the book first if you want to keep it).");
-      if (!ok) return;
-      engine.loadDoc(structuredClone(item.doc));
-      close();
-    });
-
-    const delBtn = document.createElement("button");
-    delBtn.className = "page-btn";
-    delBtn.textContent = "Delete";
-    delBtn.addEventListener("click", async () => {
-      if (!confirm("Tear this page out of the book? This can't be undone.")) return;
-      await galleryDelete(item.id);
-      rebuild(Math.max(1, turnedCount() - 1));
-    });
-
-    row.append(openBtn, delBtn);
-    f.append(img, caption, row);
+    f.append(img, caption);
     return f;
   }
 
-  function currentFace(rebuild: (turnedCount: number) => void, turnedCount: () => number): HTMLDivElement {
+  function currentFace(): HTMLDivElement {
     const f = document.createElement("div");
     const img = document.createElement("img");
     img.className = "page-art";
@@ -179,10 +308,12 @@ export function openSketchbook(engine: PaintEngine) {
     saveBtn.disabled = !engine.hasContent();
     saveBtn.addEventListener("click", async () => {
       saveBtn.disabled = true;
+      const blob = await canvasToBlob(engine.exportCanvas());
       await galleryPut({
         id: crypto.randomUUID(),
+        bookId: book.id,
         thumb: makeThumb(engine),
-        doc: structuredClone(engine.getDoc()),
+        blob,
         updatedAt: Date.now(),
       });
       rebuild(turnedCount());
@@ -207,18 +338,18 @@ export function openSketchbook(engine: PaintEngine) {
   }
 
   async function rebuild(keepTurned: number) {
-    book.innerHTML = "";
+    bookEl.innerHTML = "";
     leaves = [];
-    const items = (await galleryAll()).sort((a, b) => a.updatedAt - b.updatedAt);
+    const items = await galleryByBook(book.id);
 
     leaves.push(makeLeaf(coverFace()));
     if (items.length === 0) {
       leaves.push(makeLeaf(emptyFace()));
     }
     for (const item of items) {
-      leaves.push(makeLeaf(itemFace(item, rebuild, turnedCount)));
+      leaves.push(makeLeaf(itemFace(item)));
     }
-    leaves.push(makeLeaf(currentFace(rebuild, turnedCount)));
+    leaves.push(makeLeaf(currentFace()));
 
     const maxTurnable = leaves.length - 1;
     for (let i = 0; i < Math.min(keepTurned, maxTurnable); i++) {
@@ -226,11 +357,10 @@ export function openSketchbook(engine: PaintEngine) {
       leaves[i].el.classList.add("turned", "no-anim");
     }
     applyZ();
-    // re-enable the flip animation after the initial state is painted
     requestAnimationFrame(() => {
       for (const l of leaves) l.el.classList.remove("no-anim");
     });
   }
 
-  rebuild(0);
+  await rebuild(0);
 }
