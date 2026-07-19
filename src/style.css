@@ -83,19 +83,34 @@ body {
 }
 
 .brush-btn {
-  padding: 8px 10px;
+  position: relative;
+  padding: 9px 11px;
   border-radius: 8px;
-  border: 1px solid #383741;
+  border: none;
   background: #26252c;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.25);
   color: #cfcad2;
   font-size: 13px;
   cursor: pointer;
   flex: 0 0 auto;
+  transition-property: transform, background-color, box-shadow, color;
+  transition-duration: 0.15s;
+}
+
+/* extend the tap target to ~44px tall without growing the visual */
+.brush-btn::after {
+  content: "";
+  position: absolute;
+  inset: -5px -2px;
+}
+
+.brush-btn:active {
+  transform: scale(0.96);
 }
 
 .brush-btn.is-active {
   background: #3d2a3f;
-  border-color: #8a5a92;
+  box-shadow: inset 0 0 0 1px #8a5a92, 0 1px 2px rgba(0, 0, 0, 0.25);
   color: #fff;
 }
 
@@ -106,6 +121,7 @@ body {
 }
 
 .swatch {
+  position: relative;
   width: 34px;
   height: 34px;
   border-radius: 50%;
@@ -113,6 +129,20 @@ body {
   flex: 0 0 auto;
   padding: 0;
   cursor: pointer;
+  transition-property: transform, border-color;
+  transition-duration: 0.15s;
+}
+
+/* stretch the tap target toward 44px; capped at half the 8px gap so
+   neighboring swatch hit areas never overlap */
+.swatch::after {
+  content: "";
+  position: absolute;
+  inset: -6px -4px;
+}
+
+.swatch:active {
+  transform: scale(0.96);
 }
 
 .swatch.is-active {
@@ -121,20 +151,7 @@ body {
 }
 
 .swatch--custom {
-  position: relative;
-  overflow: hidden;
   background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
-}
-
-.swatch--custom input[type="color"] {
-  position: absolute;
-  inset: -4px;
-  width: calc(100% + 8px);
-  height: calc(100% + 8px);
-  border: none;
-  padding: 0;
-  opacity: 0;
-  cursor: pointer;
 }
 
 .toolbar__divider {
@@ -170,11 +187,13 @@ input[type="range"] {
 }
 
 .icon-btn {
+  position: relative;
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  border: 1px solid #383741;
+  border: none;
   background: #26252c;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.25);
   color: #eceaf0;
   font-size: 18px;
   display: flex;
@@ -182,6 +201,14 @@ input[type="range"] {
   justify-content: center;
   cursor: pointer;
   flex: 0 0 auto;
+  transition-property: transform, background-color, opacity;
+  transition-duration: 0.15s;
+}
+
+.icon-btn::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
 }
 
 .icon-btn:disabled {
@@ -190,6 +217,7 @@ input[type="range"] {
 
 .icon-btn:active:not(:disabled) {
   background: #322f3a;
+  transform: scale(0.96);
 }
 
 .dialog-overlay {
@@ -201,18 +229,38 @@ input[type="range"] {
   justify-content: center;
   z-index: 100;
   padding: 20px;
+  animation: overlay-in 0.18s ease-out;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .dialog {
   background: #1e1d23;
-  border: 1px solid #383741;
-  border-radius: 14px;
+  /* layered shadows read as depth on any background; a solid border can't */
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 8px 24px rgba(0, 0, 0, 0.45),
+    0 24px 56px rgba(0, 0, 0, 0.35);
+  /* concentric with the 8-10px radii inside: inner radius + padding-ish */
+  border-radius: 20px;
   padding: 20px;
   width: 100%;
   max-width: 340px;
   max-height: 85vh;
   overflow-y: auto;
   color: #eceaf0;
+  animation: dialog-in 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
 }
 
 .dialog h2 {
@@ -235,15 +283,19 @@ input[type="range"] {
   gap: 8px;
   padding: 12px 8px;
   border-radius: 10px;
-  border: 1px solid #383741;
+  border: none;
   background: #26252c;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   color: #eceaf0;
   cursor: pointer;
   font-size: 13px;
+  transition-property: transform, background-color;
+  transition-duration: 0.15s;
 }
 
 .preset-btn:active {
   background: #322f3a;
+  transform: scale(0.96);
 }
 
 .preset-btn__swatch {
@@ -276,7 +328,8 @@ input[type="range"] {
   border-radius: 8px;
   color: #eceaf0;
   padding: 8px 10px;
-  font-size: 14px;
+  /* below 16px, mobile browsers zoom the page when an input focuses */
+  font-size: 16px;
 }
 
 .dialog__custom-row span {
@@ -292,17 +345,24 @@ input[type="range"] {
 
 .dialog__actions button {
   flex: 1;
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid #383741;
+  padding: 12px 10px;
+  border-radius: 10px;
+  border: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   font-size: 14px;
   cursor: pointer;
+  transition-property: transform;
+  transition-duration: 0.15s;
+}
+
+.dialog__actions button:active {
+  transform: scale(0.96);
 }
 
 .dialog__actions .btn-primary {
   background: #7a1f2b;
   color: #fff;
-  border-color: #7a1f2b;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .dialog__actions .btn-secondary {
@@ -324,12 +384,21 @@ input[type="range"] {
 }
 
 .bg-swatch {
+  position: relative;
   width: 34px;
   height: 34px;
   border-radius: 8px;
   border: 2px solid rgba(255, 255, 255, 0.2);
   cursor: pointer;
   padding: 0;
+  transition-property: transform, border-color;
+  transition-duration: 0.15s;
+}
+
+.bg-swatch::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
 }
 
 .bg-swatch.is-active {
@@ -353,6 +422,7 @@ input[type="range"] {
 }
 
 .color-slot {
+  position: relative;
   width: 30px;
   height: 30px;
   border-radius: 50%;
@@ -362,6 +432,15 @@ input[type="range"] {
   color: rgba(255, 255, 255, 0.5);
   font-size: 15px;
   line-height: 1;
+  transition-property: transform, border-color;
+  transition-duration: 0.15s;
+}
+
+/* grow the tap target; kept clear of the x badge above-right */
+.color-slot::after {
+  content: "";
+  position: absolute;
+  inset: -7px 0 -7px -7px;
 }
 
 .color-slot.is-empty {
@@ -376,10 +455,10 @@ input[type="range"] {
 
 .color-slot-clear {
   position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 17px;
-  height: 17px;
+  top: -7px;
+  right: -7px;
+  width: 19px;
+  height: 19px;
   border-radius: 50%;
   border: 1px solid #1e1d23;
   background: #514e5c;
@@ -392,6 +471,18 @@ input[type="range"] {
   align-items: center;
   justify-content: center;
   z-index: 2;
+  transition-property: transform;
+  transition-duration: 0.15s;
+}
+
+.color-slot-clear::after {
+  content: "";
+  position: absolute;
+  inset: -6px -6px 0 0;
+}
+
+.color-slot-clear:active {
+  transform: scale(0.96);
 }
 
 /* ---- custom color picker ---- */
@@ -472,7 +563,8 @@ input[type="range"] {
   border-radius: 8px;
   color: #eceaf0;
   padding: 10px 12px;
-  font-size: 15px;
+  /* below 16px, mobile browsers zoom the page when an input focuses */
+  font-size: 16px;
   font-family: ui-monospace, monospace;
 }
 
@@ -488,6 +580,7 @@ input[type="range"] {
   align-items: center;
   padding: calc(20px + env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom));
   overflow-y: auto;
+  animation: overlay-in 0.18s ease-out;
 }
 
 .library__title {
@@ -519,7 +612,10 @@ input[type="range"] {
     linear-gradient(to right, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0) 9%),
     linear-gradient(135deg, #4a2530, #2c161d 70%);
   color: #e8dfc9;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 4px 14px rgba(0, 0, 0, 0.5),
+    0 12px 28px rgba(0, 0, 0, 0.3);
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -527,6 +623,12 @@ input[type="range"] {
   justify-content: center;
   gap: 8px;
   padding: 12px;
+  transition-property: transform;
+  transition-duration: 0.15s;
+}
+
+.library__cover:active {
+  transform: scale(0.96);
 }
 
 .library__book:nth-child(2n) .library__cover {
@@ -575,6 +677,18 @@ input[type="range"] {
   font-size: 11px;
   cursor: pointer;
   z-index: 2;
+  transition-property: transform;
+  transition-duration: 0.15s;
+}
+
+.library__del::after {
+  content: "";
+  position: absolute;
+  inset: -9px -9px 0 0;
+}
+
+.library__del:active {
+  transform: scale(0.96);
 }
 
 .library__error {
@@ -592,10 +706,17 @@ input[type="range"] {
   border-radius: 12px;
   border: none;
   background: #7a1f2b;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.4);
   color: #fff;
   font-size: 15px;
   cursor: pointer;
   flex: 0 0 auto;
+  transition-property: transform;
+  transition-duration: 0.15s;
+}
+
+.library__paint:active {
+  transform: scale(0.96);
 }
 
 /* ---- full-screen viewer ---- */
@@ -611,13 +732,19 @@ input[type="range"] {
   justify-content: center;
   gap: 18px;
   padding: 20px;
+  animation: overlay-in 0.18s ease-out;
 }
 
 .viewer__img {
   max-width: 100%;
   max-height: 74vh;
   border-radius: 6px;
+  /* pure-white low-opacity outline keeps the art's edge legible on the
+     dark backdrop without reading as a border */
+  outline: 1px solid rgba(255, 255, 255, 0.1);
+  outline-offset: -1px;
   box-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+  animation: dialog-in 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .viewer__bar {
@@ -636,13 +763,20 @@ input[type="range"] {
   top: calc(12px + env(safe-area-inset-top));
   left: 14px;
   z-index: 200;
-  padding: 10px 14px;
-  border-radius: 21px;
-  border: 1px solid #4a4855;
+  padding: 12px 16px;
+  border-radius: 22px;
+  border: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.35);
   background: #26252c;
   color: #eceaf0;
   font-size: 14px;
   cursor: pointer;
+  transition-property: transform;
+  transition-duration: 0.15s;
+}
+
+.sketchbook__back:active {
+  transform: scale(0.96);
 }
 
 /* ---- sketchbook ---- */
@@ -656,6 +790,7 @@ input[type="range"] {
   align-items: center;
   justify-content: center;
   perspective: 1800px;
+  animation: overlay-in 0.18s ease-out;
 }
 
 .sketchbook__close {
@@ -663,14 +798,21 @@ input[type="range"] {
   top: calc(12px + env(safe-area-inset-top));
   right: 14px;
   z-index: 200;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  border: 1px solid #4a4855;
+  border: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.35);
   background: #26252c;
   color: #eceaf0;
   font-size: 17px;
   cursor: pointer;
+  transition-property: transform;
+  transition-duration: 0.15s;
+}
+
+.sketchbook__close:active {
+  transform: scale(0.96);
 }
 
 .sketchbook__hint {
@@ -773,6 +915,9 @@ input[type="range"] {
   max-width: 100%;
   max-height: 62%;
   border-radius: 4px;
+  /* on the light paper page the outline must be pure black, low opacity */
+  outline: 1px solid rgba(0, 0, 0, 0.1);
+  outline-offset: -1px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 
@@ -788,18 +933,32 @@ input[type="range"] {
 }
 
 .page-btn {
-  padding: 9px 14px;
+  position: relative;
+  padding: 11px 14px;
   border-radius: 8px;
-  border: 1px solid #c9bfa9;
+  border: none;
+  box-shadow: inset 0 0 0 1px #c9bfa9, 0 1px 2px rgba(0, 0, 0, 0.12);
   background: #f7f2e6;
   color: #3d372c;
   font-size: 13px;
   cursor: pointer;
+  transition-property: transform, opacity;
+  transition-duration: 0.15s;
+}
+
+.page-btn::after {
+  content: "";
+  position: absolute;
+  inset: -4px -2px;
+}
+
+.page-btn:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .page-btn--primary {
   background: #7a1f2b;
-  border-color: #7a1f2b;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 1px 3px rgba(0, 0, 0, 0.25);
   color: #fff;
 }
 
