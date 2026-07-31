@@ -1,6 +1,15 @@
 import type { PaintEngine } from "../engine/paintEngine";
 import type { GalleryItem, Book } from "../engine/types";
-import { galleryByBook, galleryPut, galleryDelete, listBooks, bookPut, bookDelete } from "../engine/persist";
+import {
+  galleryByBook,
+  galleryPut,
+  galleryDelete,
+  listBooks,
+  bookPut,
+  bookDelete,
+  getCurrentBookId,
+  setCurrentBookId,
+} from "../engine/persist";
 import { canvasToBlob, exportImagePng, exportImageJpg } from "../export/image";
 
 const THUMB_MAX = 480;
@@ -13,6 +22,32 @@ function makeThumb(engine: PaintEngine): string {
   t.height = Math.max(1, Math.round(full.height * scale));
   t.getContext("2d")!.drawImage(full, 0, 0, t.width, t.height);
   return t.toDataURL("image/jpeg", 0.8);
+}
+
+// Saves the current canvas as a new page in `bookId` (defaults to whichever
+// book was opened last), keeping full resolution alongside the thumbnail.
+export async function saveCanvasToBook(engine: PaintEngine, bookId?: string): Promise<void> {
+  const id = bookId ?? (await getCurrentBookId());
+  const blob = await canvasToBlob(engine.exportCanvas());
+  await galleryPut({
+    id: crypto.randomUUID(),
+    bookId: id,
+    thumb: makeThumb(engine),
+    blob,
+    updatedAt: Date.now(),
+  });
+}
+
+export function showToast(message: string) {
+  document.querySelector(".toast")?.remove();
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("toast--out");
+    setTimeout(() => el.remove(), 220);
+  }, 1600);
 }
 
 function fmtDate(ts: number): string {
@@ -206,10 +241,6 @@ export async function openSketchbook(engine: PaintEngine, book: Book) {
   closeBtn.setAttribute("aria-label", "close sketchbook");
   closeBtn.addEventListener("click", close);
 
-  const hint = document.createElement("div");
-  hint.className = "sketchbook__hint";
-  hint.textContent = "tap the page edges to turn · tap a painting to view & export";
-
   const bookEl = document.createElement("div");
   bookEl.className = "book";
 
@@ -218,8 +249,40 @@ export async function openSketchbook(engine: PaintEngine, book: Book) {
   const zoneR = document.createElement("div");
   zoneR.className = "book__zone book__zone--right";
 
-  overlay.append(backBtn, closeBtn, bookEl, zoneL, zoneR, hint);
+  // Persistent footer. The save action used to live only on the book's last
+  // page, which sits *under* the cover - it took several edge taps before it
+  // could even be tapped, so it read as missing entirely. It lives here now,
+  // always visible, whatever page you're on.
+  const footer = document.createElement("div");
+  footer.className = "sketchbook__footer";
+
+  const prevBtn = document.createElement("button");
+  prevBtn.className = "book-nav";
+  prevBtn.textContent = "‹";
+  prevBtn.setAttribute("aria-label", "previous page");
+
+  const counter = document.createElement("div");
+  counter.className = "book-counter";
+
+  const nextBtn = document.createElement("button");
+  nextBtn.className = "book-nav";
+  nextBtn.textContent = "›";
+  nextBtn.setAttribute("aria-label", "next page");
+
+  const saveBar = document.createElement("button");
+  saveBar.className = "sketchbook__save";
+  saveBar.textContent = "＋ Save canvas to this book";
+  saveBar.setAttribute("aria-label", "save current canvas to this book");
+
+  const nav = document.createElement("div");
+  nav.className = "sketchbook__nav";
+  nav.append(prevBtn, counter, nextBtn);
+  footer.append(saveBar, nav);
+
+  overlay.append(backBtn, closeBtn, bookEl, zoneL, zoneR, footer);
   document.body.appendChild(overlay);
+
+  setCurrentBookId(book.id).catch(() => {});
 
   let leaves: Leaf[] = [];
 
@@ -234,12 +297,20 @@ export async function openSketchbook(engine: PaintEngine, book: Book) {
     });
   }
 
+  function syncNav() {
+    const turned = turnedCount();
+    counter.textContent = `${turned + 1} / ${leaves.length}`;
+    prevBtn.disabled = turned === 0;
+    nextBtn.disabled = turned >= leaves.length - 1;
+  }
+
   function turnForward() {
     const leaf = leaves.find((l) => !l.turned);
     if (!leaf || leaves.indexOf(leaf) === leaves.length - 1) return;
     leaf.turned = true;
     applyZ(leaf.el);
     leaf.el.classList.add("turned");
+    syncNav();
     setTimeout(() => applyZ(), 650);
   }
 
@@ -250,11 +321,27 @@ export async function openSketchbook(engine: PaintEngine, book: Book) {
     leaf.turned = false;
     applyZ(leaf.el);
     leaf.el.classList.remove("turned");
+    syncNav();
     setTimeout(() => applyZ(), 650);
   }
 
   zoneR.addEventListener("click", turnForward);
   zoneL.addEventListener("click", turnBack);
+  nextBtn.addEventListener("click", turnForward);
+  prevBtn.addEventListener("click", turnBack);
+
+  saveBar.addEventListener("click", async () => {
+    if (!engine.hasContent()) {
+      showToast("Nothing to save — paint something first");
+      return;
+    }
+    saveBar.disabled = true;
+    await saveCanvasToBook(engine, book.id);
+    showToast("Saved to this book");
+    // land the reader on the page that was just added
+    await rebuild(leaves.length - 1);
+    saveBar.disabled = false;
+  });
 
   function makeLeaf(front: HTMLDivElement): Leaf {
     const el = document.createElement("div");
@@ -315,24 +402,7 @@ export async function openSketchbook(engine: PaintEngine, book: Book) {
     contBtn.textContent = "Continue painting";
     contBtn.addEventListener("click", close);
 
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "page-btn";
-    saveBtn.textContent = "Save to book";
-    saveBtn.disabled = !engine.hasContent();
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.disabled = true;
-      const blob = await canvasToBlob(engine.exportCanvas());
-      await galleryPut({
-        id: crypto.randomUUID(),
-        bookId: book.id,
-        thumb: makeThumb(engine),
-        blob,
-        updatedAt: Date.now(),
-      });
-      rebuild(turnedCount());
-    });
-
-    row.append(contBtn, saveBtn);
+    row.append(contBtn);
     f.append(img, caption, row);
     return f;
   }
@@ -370,6 +440,7 @@ export async function openSketchbook(engine: PaintEngine, book: Book) {
       leaves[i].el.classList.add("turned", "no-anim");
     }
     applyZ();
+    syncNav();
     requestAnimationFrame(() => {
       for (const l of leaves) l.el.classList.remove("no-anim");
     });

@@ -3,7 +3,7 @@ import type { PaintEngine } from "../engine/paintEngine";
 import type { BrushId } from "../engine/types";
 import { exportCanvasPng } from "../export/image";
 import { openNewCanvasDialog } from "./newCanvasDialog";
-import { openLibrary } from "./sketchbook";
+import { openLibrary, saveCanvasToBook, showToast } from "./sketchbook";
 import { openColorPicker } from "./colorPicker";
 
 const BRUSH_OPTIONS: { id: BrushId; label: string; title: string }[] = [
@@ -85,6 +85,28 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
   galleryBtn.setAttribute("aria-label", "gallery");
   galleryBtn.addEventListener("click", () => openLibrary(engine));
 
+  // one-tap save into the sketchbook you last opened, so keeping a piece
+  // never requires opening the book and flipping to a particular page
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "icon-btn";
+  saveBtn.textContent = "✚";
+  saveBtn.title = "save this painting to your sketchbook";
+  saveBtn.setAttribute("aria-label", "save to sketchbook");
+  saveBtn.addEventListener("click", async () => {
+    if (!engine.hasContent()) {
+      showToast("Nothing to save — paint something first");
+      return;
+    }
+    saveBtn.disabled = true;
+    try {
+      await saveCanvasToBook(engine);
+      showToast("Saved to your sketchbook");
+    } catch {
+      showToast("Couldn't save — storage unavailable");
+    }
+    saveBtn.disabled = false;
+  });
+
   const exportBtn = document.createElement("button");
   exportBtn.className = "icon-btn";
   exportBtn.textContent = "⇧";
@@ -93,7 +115,7 @@ export function buildToolbar(engine: PaintEngine): HTMLDivElement {
     exportCanvasPng(engine.exportCanvas());
   });
 
-  actions.append(newCanvasBtn, galleryBtn, undoBtn, redoBtn, clearBtn, exportBtn);
+  actions.append(newCanvasBtn, galleryBtn, saveBtn, undoBtn, redoBtn, clearBtn, exportBtn);
   rowTools.append(brushWrap, actions);
 
   // ---- row 2: color slots | palette | custom | size ----

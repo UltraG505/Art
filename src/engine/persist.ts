@@ -57,6 +57,18 @@ export function saveCurrent(doc: PaintingDoc): Promise<unknown> {
   return tx("kv", "readwrite", (s) => s.put(doc, "current"));
 }
 
+// which book new pages go into when saving without opening a book first
+export function setCurrentBookId(id: string): Promise<unknown> {
+  return tx("kv", "readwrite", (s) => s.put(id, "currentBook"));
+}
+
+export async function getCurrentBookId(): Promise<string> {
+  const books = await listBooks();
+  const stored = await tx<string | undefined>("kv", "readonly", (s) => s.get("currentBook") as IDBRequest<string | undefined>);
+  if (stored && books.some((b) => b.id === stored)) return stored;
+  return books[0].id;
+}
+
 export function loadCurrent(): Promise<PaintingDoc | undefined> {
   return tx<PaintingDoc | undefined>("kv", "readonly", (s) => s.get("current") as IDBRequest<PaintingDoc | undefined>);
 }
