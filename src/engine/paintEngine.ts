@@ -232,7 +232,7 @@ export class PaintEngine {
       for (let i = 0; i < pending.length; i += BATCH) {
         this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
         for (const stroke of pending.slice(i, i + BATCH)) {
-          renderStroke(this.paintCtx, stroke);
+          renderStroke(this.paintCtx, stroke, this.bg);
         }
         if (i + BATCH < pending.length) {
           await new Promise((r) => requestAnimationFrame(r));
@@ -316,7 +316,7 @@ export class PaintEngine {
     this.paintCtx.clearRect(0, 0, this.cssW, this.cssH);
     this.drawBase();
     for (const stroke of this.strokes) {
-      renderStroke(this.paintCtx, stroke);
+      renderStroke(this.paintCtx, stroke, this.bg);
     }
 
     // a full replay invalidates any snapshots (they're pixel copies at the
@@ -367,7 +367,7 @@ export class PaintEngine {
       };
       this.liveBrush = getBrush(this.brush);
       this.liveRand = mulberry32(seed);
-      this.liveState = this.liveBrush.init(strokeColors, this.liveRand);
+      this.liveState = this.liveBrush.init(strokeColors, this.liveRand, this.bg);
       this.redoStack = [];
       this.pendingSnapshot = this.snapshotCanvas();
     });
@@ -394,6 +394,9 @@ export class PaintEngine {
         const p = this.current.points[0];
         this.liveBrush.segment(this.paintCtx, this.liveState, this.liveRand, p, p, this.current.color, this.current.size);
       }
+      // let a deferred brush put down anything it was still coalescing
+      // before this stroke is committed and snapshotted
+      this.liveBrush?.flush?.(this.paintCtx, this.liveState);
       this.strokes.push(this.current);
       if (this.pendingSnapshot) {
         this.pushSnapshot(this.current, this.pendingSnapshot);
@@ -447,7 +450,7 @@ export class PaintEngine {
 
     const snap = this.snapshotCanvas();
     this.paintCtx.setTransform(this.backingScale, 0, 0, this.backingScale, 0, 0);
-    renderStroke(this.paintCtx, s);
+    renderStroke(this.paintCtx, s, this.bg);
 
     this.strokes.push(s);
     this.pushSnapshot(s, snap);

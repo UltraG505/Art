@@ -9,6 +9,7 @@ import { openColorPicker } from "./colorPicker";
 const BRUSH_OPTIONS: { id: BrushId; label: string; title: string }[] = [
   { id: "wetBlend", label: "Paint", title: "wet paint - blends with color underneath" },
   { id: "flow", label: "Flow", title: "curvy streaked strokes with bristle ridges" },
+  { id: "water", label: "Water", title: "watercolor wash - pale stain with a dark bleeding rim" },
   { id: "chalk", label: "Chalk", title: "dry pastel - grainy scribble marks" },
   { id: "glow", label: "Glow", title: "light trail - best on a black canvas" },
   { id: "ink", label: "Ink", title: "thin pen line for details" },

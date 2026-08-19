@@ -5,6 +5,7 @@ import { chalkBrush } from "./chalkBrush";
 import { glowBrush } from "./glowBrush";
 import { flowBrush } from "./flowBrush";
 import { inkBrush } from "./inkBrush";
+import { waterBrush } from "./waterBrush";
 
 export type RandFn = () => number;
 
@@ -15,7 +16,9 @@ export type RandFn = () => number;
 // interface with the same seeded RNG - init consumes random values first,
 // segments continue the sequence - so they produce identical pixels.
 export interface BrushImpl {
-  init(colors: string[], rand: RandFn): unknown;
+  // `bg` lets a brush adapt to the ground it is painting on - watercolor
+  // stains darken paper but have to lighten a dark canvas to show at all
+  init(colors: string[], rand: RandFn, bg?: string): unknown;
   segment(
     ctx: CanvasRenderingContext2D,
     state: unknown,
@@ -25,11 +28,16 @@ export interface BrushImpl {
     color: string,
     size: number,
   ): void;
+  // Brushes that defer drawing (to coalesce work into one pass per frame)
+  // implement this to force that pass out. Called when a stroke ends and at
+  // the end of replay, so nothing is left pending on the canvas.
+  flush?(ctx: CanvasRenderingContext2D, state: unknown): void;
 }
 
 const BRUSHES: Record<BrushId, BrushImpl> = {
   wetBlend: wetBlendBrush,
   flow: flowBrush,
+  water: waterBrush,
   chalk: chalkBrush,
   glow: glowBrush,
   ink: inkBrush,
@@ -44,15 +52,16 @@ export function strokeColors(stroke: Stroke): string[] {
   return stroke.colors && stroke.colors.length > 0 ? stroke.colors : [stroke.color];
 }
 
-export function renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
+export function renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, bg?: string) {
   const brush = getBrush(stroke.brush);
   const rand = mulberry32(stroke.seed);
-  const state = brush.init(strokeColors(stroke), rand);
+  const state = brush.init(strokeColors(stroke), rand, bg);
   const pts = stroke.points;
   if (pts.length === 0) return;
 
   if (pts.length === 1) {
     brush.segment(ctx, state, rand, pts[0], pts[0], stroke.color, stroke.size);
+    brush.flush?.(ctx, state);
     return;
   }
 
@@ -61,4 +70,5 @@ export function renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
     brush.segment(ctx, state, rand, prev, pts[i], stroke.color, stroke.size);
     prev = pts[i];
   }
+  brush.flush?.(ctx, state);
 }

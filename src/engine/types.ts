@@ -7,7 +7,7 @@ export interface StrokePoint {
   pr?: number;
 }
 
-export type BrushId = "wetBlend" | "flow" | "chalk" | "glow" | "ink" | "smudge";
+export type BrushId = "wetBlend" | "flow" | "water" | "chalk" | "glow" | "ink" | "smudge";
 
 export interface Stroke {
   id: string;
