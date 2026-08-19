@@ -72,15 +72,20 @@ function makeWetBrush(opts: WetOpts): BrushImpl {
   ) {
     // 1. pick up whatever is already on the canvas at this spot (BEFORE
     // depositing) so the brush mixes with paint it's dragging over, not with
-    // what it just laid down itself
+    // what it just laid down itself.
+    // The source rectangle indexes the backing store, which is in device
+    // pixels, while x/y/diameter are logical - without scaling by the
+    // context transform the brush sampled the wrong part of the canvas
+    // entirely on any high-density screen.
     const sctx = state.scratch.getContext("2d")!;
+    const px = ctx.getTransform().a || 1;
     sctx.clearRect(0, 0, WORK_SIZE, WORK_SIZE);
     sctx.drawImage(
       ctx.canvas,
-      x - diameter / 2,
-      y - diameter / 2,
-      diameter,
-      diameter,
+      (x - diameter / 2) * px,
+      (y - diameter / 2) * px,
+      diameter * px,
+      diameter * px,
       0,
       0,
       WORK_SIZE,

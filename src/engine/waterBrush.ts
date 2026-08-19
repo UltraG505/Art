@@ -1,26 +1,25 @@
 import type { BrushImpl } from "./brushes";
-import { hexToRgb, darken } from "./color";
+import { hexToRgb } from "./color";
 import { mulberry32 } from "./random";
+import { wetBlendBrush } from "./wetBlendBrush";
 
-// Watercolor.
+// Wet paint that dries like watercolor.
 //
-// What makes a water stain read as a water stain is the drying edge: water
-// carries pigment outward, evaporates at the perimeter and strands it there,
-// leaving a pale even interior ringed by ONE darker meandering contour.
+// The body of the stroke is the ordinary paint brush - loaded bristles that
+// pick up and smear whatever is already on the canvas - so the interior
+// keeps its grain and its blending. What is added is the drying edge: water
+// carries pigment to the perimeter of the wet area, evaporates, and strands
+// it there as one dark meandering tide line, with a soft halo bleeding out
+// past the pigment.
 //
-// So this brush does not paint dabs straight onto the canvas - stamping
-// rimmed dabs leaves every dab's outline crossing the interior and the whole
-// thing turns hairy. Instead each stroke accumulates its wet region in an
-// offscreen layer at full opacity (so overlaps stay flat instead of building
-// up), plus a second copy of the same region shrunk slightly. The difference
-// between the two is exactly the outer boundary of the whole region, which
-// is where the rim goes. The canvas is then recomposited from a snapshot
-// taken at stroke start, so wash laid down later dissolves the rim it
+// The rim has to follow the boundary of the WHOLE wet area, not of each dab,
+// or every dab's outline shows through the middle and the stroke turns
+// hairy. So the paint goes onto an offscreen copy of the canvas while a
+// parallel mask records the wet region, a second copy of that mask is kept
+// slightly shrunk, and the difference between them is exactly the outer
+// contour. The visible canvas is rebuilt from the paint layer each pass,
+// which is what lets a later part of the stroke dissolve the rim it now
 // covers, the way fresh water reactivates a drying edge.
-//
-// Recompositing is confined to the area the newest dabs touched (padded by
-// one dab radius, which bounds where an old rim can have just become
-// interior), so the cost per input event stays local rather than full-canvas.
 
 interface Lobe {
   freq: number;
@@ -29,27 +28,21 @@ interface Lobe {
 }
 
 interface Layers {
-  wet: HTMLCanvasElement; // colored dabs at full alpha; its alpha is the region
-  core: HTMLCanvasElement; // same dabs, shrunk - eroded region
-  base: HTMLCanvasElement; // canvas content before this stroke
-  // scratch for building the rim. Only ever holds the patch being
-  // recomposited, so it stays small even on a 2000px canvas - a full-size
-  // scratch layer here was a third of the per-stroke allocation and made
-  // every composite touch far more memory than it needed to.
+  // canvas content at stroke start with this stroke's paint stamped into
+  // it; the visible canvas is re-blitted from here
+  paint: HTMLCanvasElement;
+  wet: HTMLCanvasElement; // wet region, opaque so overlaps stay flat
+  core: HTMLCanvasElement; // same region shrunk - eroded copy
+  tide: HTMLCanvasElement; // overtaken drying fronts left inside the stain
   tmp: HTMLCanvasElement;
   tmp2: HTMLCanvasElement;
   pattern: CanvasPattern | null;
-  // The region layers are kept at reduced resolution. A wash edge is soft by
-  // nature, so full canvas resolution buys nothing visible, while on a
-  // 2000px canvas the dabs scale up with it and every composite would push
-  // millions of pixels per input event - that was a 600ms stall mid-stroke.
+  // The region masks run at reduced resolution. A wash edge is soft anyway,
+  // so full canvas resolution buys nothing visible, while on a large canvas
+  // the dabs scale up with it and every pass would push millions of pixels
+  // per input event.
   scale: number;
 }
-
-const LAYER_MAX = 1400;
-// diffusion radii, in reduced-layer pixels
-const BLUR_RIM = 5;
-const BLUR_WASH = 3.5;
 
 interface Dirty {
   minX: number;
@@ -59,6 +52,7 @@ interface Dirty {
 }
 
 interface WaterState {
+  paint: unknown; // the paint brush's own per-stroke state
   colors: string[];
   lobes: Lobe[];
   reachFactor: number;
@@ -67,17 +61,20 @@ interface WaterState {
   sinceBloom: number;
   dark: boolean;
   layers: Layers | null;
-  // Dabs land in the offscreen layers immediately, but the visible
-  // recomposite is coalesced into one pass per animation frame. Touch panels
-  // deliver input far faster than the display refreshes, and compositing per
-  // event meant redoing the same patch several times before anything was
-  // shown - the single biggest cost in the brush.
+  // Dabs land in the offscreen layers immediately, but the visible rebuild
+  // is coalesced into one pass per animation frame - touch panels deliver
+  // input far faster than the display refreshes, and rebuilding per event
+  // redid the same patch several times before anything was shown.
   dirty: Dirty | null;
   raf: number | null;
 }
 
 const POINTS = 36;
 const CORE = 0.91; // eroded radius as a fraction of the wet radius
+const LAYER_MAX = 1400;
+// diffusion radii, in reduced-layer pixels
+const BLUR_RIM = 5;
+const BLUR_WASH = 3.5;
 
 function isDark(hex: string): boolean {
   const [r, g, b] = hexToRgb(hex);
@@ -131,32 +128,32 @@ function makeLayer(w: number, h: number, t: DOMMatrix): HTMLCanvasElement {
 
 // Strokes are sequential, so one set of layers can serve all of them. Left
 // to allocate per stroke, a big canvas meant tens of megabytes of fresh
-// buffers every time the finger came down - a visible hitch at the start of
-// each stroke, and steady GC pressure through a session.
+// buffers every time the finger came down.
 let pool: (Layers & { w: number; h: number }) | null = null;
 
 function takeLayers(canvas: HTMLCanvasElement, t: DOMMatrix): Layers {
   const ls = Math.min(1, LAYER_MAX / Math.max(canvas.width, canvas.height));
   const lw = Math.max(1, Math.round(canvas.width * ls));
   const lh = Math.max(1, Math.round(canvas.height * ls));
-  // dabs are addressed in logical units, so the layer transform is the
-  // canvas transform with the downscale folded in
+  // dabs are addressed in logical units, so the mask transform is the canvas
+  // transform with the downscale folded in
   const lt = new DOMMatrix([t.a * ls, 0, 0, t.d * ls, 0, 0]);
 
   if (!pool || pool.w !== canvas.width || pool.h !== canvas.height) {
     pool = {
       w: canvas.width,
       h: canvas.height,
+      paint: makeLayer(canvas.width, canvas.height, t),
       wet: makeLayer(lw, lh, lt),
       core: makeLayer(lw, lh, lt),
-      base: makeLayer(canvas.width, canvas.height, new DOMMatrix()),
+      tide: makeLayer(lw, lh, lt),
       tmp: makeLayer(64, 64, new DOMMatrix()),
       tmp2: makeLayer(64, 64, new DOMMatrix()),
       pattern: null,
       scale: ls,
     };
   } else {
-    for (const layer of [pool.wet, pool.core]) {
+    for (const layer of [pool.wet, pool.core, pool.tide]) {
       const c = layer.getContext("2d")!;
       c.setTransform(1, 0, 0, 1, 0, 0);
       c.clearRect(0, 0, layer.width, layer.height);
@@ -165,10 +162,13 @@ function takeLayers(canvas: HTMLCanvasElement, t: DOMMatrix): Layers {
     pool.scale = ls;
   }
 
-  const baseCtx = pool.base.getContext("2d")!;
-  baseCtx.setTransform(1, 0, 0, 1, 0, 0);
-  baseCtx.clearRect(0, 0, pool.base.width, pool.base.height);
-  baseCtx.drawImage(canvas, 0, 0);
+  // the paint layer starts as the canvas, so the bristles pick up the
+  // artwork already there exactly as the paint brush does on the canvas
+  const pctx = pool.paint.getContext("2d")!;
+  pctx.setTransform(1, 0, 0, 1, 0, 0);
+  pctx.clearRect(0, 0, pool.paint.width, pool.paint.height);
+  pctx.drawImage(canvas, 0, 0);
+  pctx.setTransform(t);
   return pool;
 }
 
@@ -202,10 +202,8 @@ function blobPath(
   ctx.closePath();
 }
 
-// Repaints the dirty patch from the pre-stroke snapshot: untouched canvas,
-// then the flat wash, then the rim taken from the region's outer boundary.
-// Rebuilding from the snapshot each time is what lets later wash dissolve
-// the rim it now covers, instead of leaving outlines stranded mid-stain.
+// Repaints the dirty patch: the painted stroke, then the water that spread
+// past the pigment, then the tide line stranded at the boundary.
 function composite(ctx: CanvasRenderingContext2D, state: WaterState) {
   const L = state.layers;
   const d = state.dirty;
@@ -220,20 +218,19 @@ function composite(ctx: CanvasRenderingContext2D, state: WaterState) {
   const rh = Math.min(canvas.height - ry, Math.ceil((d.maxY - d.minY) * scale) + 2);
   if (rw <= 0 || rh <= 0) return;
 
-  // the same patch expressed in the reduced-resolution layers
+  // the same patch expressed in the reduced-resolution masks
   const ls = L.scale;
   const lx = Math.max(0, Math.floor(rx * ls));
   const ly = Math.max(0, Math.floor(ry * ls));
   const lw = Math.max(1, Math.min(L.wet.width - lx, Math.ceil(rw * ls)));
   const lh = Math.max(1, Math.min(L.wet.height - ly, Math.ceil(rh * ls)));
 
-  // Diffusing happens on the reduced-resolution patch, then gets magnified
-  // on the way back to the canvas - cheap, and it scales the softness with
-  // the canvas so a big painting does not end up with a proportionally
-  // crisper edge. The patch is grown by the blur reach before the layers are
-  // sampled, otherwise the blur would fade into the transparent area outside
-  // the crop and leave a seam against the previously composited patch.
-  const pad = Math.ceil(BLUR_WASH + BLUR_RIM) + 2;
+  // Diffusion happens on the reduced patch and is magnified on the way back,
+  // which is cheap and keeps the softness proportional on a large canvas.
+  // The patch is grown by the blur reach before the masks are sampled, or
+  // the blur would fade into the empty area outside the crop and leave a
+  // seam against the previously composited patch.
+  const pad = Math.ceil(BLUR_RIM + BLUR_WASH) + 2;
   const ex = Math.max(0, lx - pad);
   const ey = Math.max(0, ly - pad);
   const ew = Math.max(1, Math.min(L.wet.width - ex, lw + (lx - ex) + pad));
@@ -251,17 +248,21 @@ function composite(ctx: CanvasRenderingContext2D, state: WaterState) {
   const rimCtx = L.tmp2.getContext("2d")!;
   if (!L.pattern) L.pattern = tmpCtx.createPattern(getMottle(), "repeat");
 
-  // the rim: wet region minus its eroded copy - the outer contour only,
-  // built in the patch's own coordinates
+  // the rim: wet region minus its eroded copy - the outer contour only -
+  // plus any drying fronts stranded inside the stain
   tmpCtx.setTransform(1, 0, 0, 1, 0, 0);
   tmpCtx.globalCompositeOperation = "source-over";
   tmpCtx.clearRect(0, 0, ew, eh);
   tmpCtx.drawImage(L.wet, ex, ey, ew, eh, 0, 0, ew, eh);
   tmpCtx.globalCompositeOperation = "destination-out";
   tmpCtx.drawImage(L.core, ex, ey, ew, eh, 0, 0, ew, eh);
+  tmpCtx.globalCompositeOperation = "source-over";
+  tmpCtx.globalAlpha = 0.5;
+  tmpCtx.drawImage(L.tide, ex, ey, ew, eh, 0, 0, ew, eh);
+  tmpCtx.globalAlpha = 1;
   // deepen it to pigment-at-the-edge, whatever colors are in the loadout
   tmpCtx.globalCompositeOperation = "source-atop";
-  tmpCtx.fillStyle = state.dark ? "rgba(255,255,255,0.65)" : "rgba(45,22,16,0.72)";
+  tmpCtx.fillStyle = state.dark ? "rgba(255,255,255,0.55)" : "rgba(60,32,22,0.55)";
   tmpCtx.fillRect(0, 0, ew, eh);
   // bite unevenly into the contour so it pools in some places and nearly
   // vanishes in others. The pattern is pinned to layer coordinates, or it
@@ -285,26 +286,28 @@ function composite(ctx: CanvasRenderingContext2D, state: WaterState) {
   rimCtx.drawImage(L.tmp, 0, 0);
   rimCtx.filter = "none";
 
-  // and feather the wash boundary, so the stain fades into the paper rather
-  // than stopping at a cut edge
+  // the halo of water that carried past the pigment, tinted and feathered
   tmpCtx.clearRect(0, 0, ew, eh);
   tmpCtx.filter = `blur(${BLUR_WASH}px)`;
   tmpCtx.drawImage(L.wet, ex, ey, ew, eh, 0, 0, ew, eh);
   tmpCtx.filter = "none";
+  tmpCtx.globalCompositeOperation = "source-in";
+  tmpCtx.fillStyle = state.colors[0];
+  tmpCtx.fillRect(0, 0, ew, eh);
+  tmpCtx.globalCompositeOperation = "source-over";
 
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 
+  // the painted stroke, grain and smearing intact
   ctx.clearRect(rx, ry, rw, rh);
-  ctx.drawImage(L.base, rx, ry, rw, rh, rx, ry, rw, rh);
+  ctx.drawImage(L.paint, rx, ry, rw, rh, rx, ry, rw, rh);
 
-  // the wash: one flat pass over the whole wet region, so overlapping dabs
-  // read as a single even stain rather than mottled buildup
   ctx.globalCompositeOperation = state.dark ? "source-over" : "multiply";
-  ctx.globalAlpha = 0.22;
+  ctx.globalAlpha = 0.13;
   ctx.drawImage(L.tmp, ox, oy, lw, lh, rx, ry, rw, rh);
 
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = 0.6;
   ctx.drawImage(L.tmp2, ox, oy, lw, lh, rx, ry, rw, rh);
 
   ctx.restore();
@@ -321,8 +324,9 @@ function scheduleComposite(ctx: CanvasRenderingContext2D, state: WaterState) {
 export const waterBrush: BrushImpl = {
   init(colors, rand, bg): WaterState {
     const lobes: Lobe[] = [];
-    // low frequencies make the big lobes, high ones the fine meander;
-    // amplitudes fall off with frequency so the outline never pinches shut
+    // low frequencies make the big lobes, higher ones the meander; finer
+    // than this the reduced mask cannot resolve it, and it aliases into
+    // stair-steps instead of reading as meander
     for (const f of [2, 3, 5, 7]) {
       lobes.push({
         freq: f + Math.floor(rand() * 2),
@@ -330,13 +334,14 @@ export const waterBrush: BrushImpl = {
         phase: rand() * Math.PI * 2,
       });
     }
-    // how far the lobes can push the outline past the nominal radius; the
-    // recomposite has to reach at least this far or a rim that just became
-    // interior would be left stranded on the canvas
     const sumAmp = lobes.reduce((a, l) => a + l.amp, 0);
     return {
+      paint: wetBlendBrush.init(colors, rand, bg),
       colors,
       lobes,
+      // how far the lobes can throw the outline past the nominal radius; the
+      // rebuild has to reach at least this far or a rim that just became
+      // interior would be left stranded on the canvas
       reachFactor: 1 + sumAmp * 1.5,
       spin: rand() * Math.PI * 2,
       travelled: 0,
@@ -348,40 +353,43 @@ export const waterBrush: BrushImpl = {
     };
   },
 
-  segment(ctx, rawState, rand, prev, cur, _color, size) {
+  segment(ctx, rawState, rand, prev, cur, color, size) {
     const state = rawState as WaterState;
-    const canvas = ctx.canvas;
-
-    if (!state.layers) {
-      state.layers = takeLayers(canvas, ctx.getTransform());
-    }
+    if (!state.layers) state.layers = takeLayers(ctx.canvas, ctx.getTransform());
     const L = state.layers;
+
+    // 1. the body of the stroke: ordinary loaded-bristle paint, laid into
+    // the offscreen copy so the visible canvas can be rebuilt without the
+    // rim accumulating in it
+    wetBlendBrush.segment(L.paint.getContext("2d")!, state.paint, rand, prev, cur, color, size);
+
+    // 2. record the wet area the water spread over
     const wetCtx = L.wet.getContext("2d")!;
     const coreCtx = L.core.getContext("2d")!;
+    const tideCtx = L.tide.getContext("2d")!;
 
     const dx = cur.x - prev.x;
     const dy = cur.y - prev.y;
     const dist = Math.hypot(dx, dy);
     const dt = Math.max(1, cur.t - prev.t);
-    const speedFactor = Math.min(1, dist / dt / 1.4);
+    const speedFactor = Math.min(1, dist / dt / 1.2);
     const pr = ((prev.pr ?? 0.5) + (cur.pr ?? 0.5)) / 2;
 
-    // dragging slowly floods more water onto the paper; a quick flick leaves
-    // a thin, starved trail
-    const wet = (1.1 - 0.4 * speedFactor) * (0.65 + pr * 0.7);
-    const spacing = Math.max(3, size * 0.26);
+    // matches the paint brush's own width, then a little wider - the water
+    // always creeps a bit past the pigment it carried
+    const paintWidth = size * (1.15 - 0.35 * speedFactor) * (0.6 + pr * 0.8);
+    const baseR = paintWidth * 0.42;
+
+    const spacing = Math.max(3, baseR * 0.5);
     const steps = Math.min(40, Math.max(1, Math.round(dist / spacing)));
 
-    const addDab = (x: number, y: number, r: number, rot: number, wobble: number, color: string) => {
-      wetCtx.globalAlpha = 1;
-      wetCtx.fillStyle = color;
+    const addDab = (x: number, y: number, r: number, rot: number, wobble: number) => {
       blobPath(wetCtx, x, y, r, state.lobes, rot, wobble);
+      wetCtx.fillStyle = "#000";
       wetCtx.fill();
       blobPath(coreCtx, x, y, r * CORE, state.lobes, rot, wobble);
       coreCtx.fillStyle = "#000";
       coreCtx.fill();
-      // pad by how far the lobes can throw the outline, which is also how
-      // far a previously drawn rim can have just been swallowed
       const reach = r * state.reachFactor + 2;
       const d = state.dirty;
       if (!d) {
@@ -398,39 +406,36 @@ export const waterBrush: BrushImpl = {
       const t = s / steps;
       const px = prev.x + dx * t;
       const py = prev.y + dy * t;
-      const color = state.colors[Math.floor(rand() * state.colors.length)];
 
       const advance = dist / steps;
       state.travelled += advance;
       state.sinceBloom += advance;
 
       const rot = state.spin + state.travelled * 0.004;
-      const r = size * 0.5 * wet * (0.85 + rand() * 0.3);
-      addDab(px, py, r, rot, 0.75 + rand() * 0.6, color);
+      const r = baseR * (0.9 + rand() * 0.25);
+      addDab(px, py, r, rot, 0.75 + rand() * 0.6);
 
       // every so often the water creeps out past the brush and dries there,
-      // throwing the twisting lobe off the side of the stroke
-      if (state.sinceBloom > size * (1.0 + rand() * 1.3)) {
+      // throwing a twisting lobe off the side of the stroke
+      if (state.sinceBloom > paintWidth * (1.6 + rand() * 1.8)) {
         state.sinceBloom = 0;
         addDab(
-          px + (rand() - 0.5) * size * 0.9,
-          py + (rand() - 0.5) * size * 0.9,
-          r * (1.15 + rand() * 0.7),
+          px + (rand() - 0.5) * paintWidth * 0.32,
+          py + (rand() - 0.5) * paintWidth * 0.32,
+          r * (1.02 + rand() * 0.22),
           rot + rand() * 2,
           1.0 + rand() * 0.5,
-          color,
         );
 
         // an earlier drying front that got overtaken, left behind as a
-        // fainter ring nested inside the stain. Drawn into the wet layer, so
-        // it is tinted by the wash and can never escape the region's edge.
-        if (rand() < 0.55) {
-          wetCtx.globalAlpha = 0.5 + rand() * 0.35;
-          wetCtx.strokeStyle = darken(color, 0.45);
-          wetCtx.lineWidth = Math.max(1, size * 0.035);
-          blobPath(wetCtx, px, py, r * (0.5 + rand() * 0.22), state.lobes, rot + rand() * 3, 1.1);
-          wetCtx.stroke();
-          wetCtx.globalAlpha = 1;
+        // fainter ring nested inside the stain
+        if (rand() < 0.5) {
+          tideCtx.globalAlpha = 0.55 + rand() * 0.35;
+          tideCtx.strokeStyle = "#000";
+          tideCtx.lineWidth = Math.max(1, size * 0.03);
+          blobPath(tideCtx, px, py, r * (0.45 + rand() * 0.22), state.lobes, rot + rand() * 3, 1.1);
+          tideCtx.stroke();
+          tideCtx.globalAlpha = 1;
         }
       }
     }
