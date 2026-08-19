@@ -37,6 +37,7 @@ interface Layers {
   // scratch layer here was a third of the per-stroke allocation and made
   // every composite touch far more memory than it needed to.
   tmp: HTMLCanvasElement;
+  tmp2: HTMLCanvasElement;
   pattern: CanvasPattern | null;
   // The region layers are kept at reduced resolution. A wash edge is soft by
   // nature, so full canvas resolution buys nothing visible, while on a
@@ -46,6 +47,9 @@ interface Layers {
 }
 
 const LAYER_MAX = 1400;
+// diffusion radii, in reduced-layer pixels
+const BLUR_RIM = 5;
+const BLUR_WASH = 3.5;
 
 interface Dirty {
   minX: number;
@@ -147,6 +151,7 @@ function takeLayers(canvas: HTMLCanvasElement, t: DOMMatrix): Layers {
       core: makeLayer(lw, lh, lt),
       base: makeLayer(canvas.width, canvas.height, new DOMMatrix()),
       tmp: makeLayer(64, 64, new DOMMatrix()),
+      tmp2: makeLayer(64, 64, new DOMMatrix()),
       pattern: null,
       scale: ls,
     };
@@ -222,38 +227,70 @@ function composite(ctx: CanvasRenderingContext2D, state: WaterState) {
   const lw = Math.max(1, Math.min(L.wet.width - lx, Math.ceil(rw * ls)));
   const lh = Math.max(1, Math.min(L.wet.height - ly, Math.ceil(rh * ls)));
 
-  // grow the scratch patch only when a bigger one is needed
-  if (L.tmp.width < lw || L.tmp.height < lh) {
-    L.tmp = makeLayer(Math.max(L.tmp.width, lw), Math.max(L.tmp.height, lh), new DOMMatrix());
+  // Diffusing happens on the reduced-resolution patch, then gets magnified
+  // on the way back to the canvas - cheap, and it scales the softness with
+  // the canvas so a big painting does not end up with a proportionally
+  // crisper edge. The patch is grown by the blur reach before the layers are
+  // sampled, otherwise the blur would fade into the transparent area outside
+  // the crop and leave a seam against the previously composited patch.
+  const pad = Math.ceil(BLUR_WASH + BLUR_RIM) + 2;
+  const ex = Math.max(0, lx - pad);
+  const ey = Math.max(0, ly - pad);
+  const ew = Math.max(1, Math.min(L.wet.width - ex, lw + (lx - ex) + pad));
+  const eh = Math.max(1, Math.min(L.wet.height - ey, lh + (ly - ey) + pad));
+  const ox = lx - ex;
+  const oy = ly - ey;
+
+  // grow the scratch patches only when bigger ones are needed
+  if (L.tmp.width < ew || L.tmp.height < eh) {
+    L.tmp = makeLayer(Math.max(L.tmp.width, ew), Math.max(L.tmp.height, eh), new DOMMatrix());
+    L.tmp2 = makeLayer(Math.max(L.tmp2.width, ew), Math.max(L.tmp2.height, eh), new DOMMatrix());
     L.pattern = null;
   }
   const tmpCtx = L.tmp.getContext("2d")!;
+  const rimCtx = L.tmp2.getContext("2d")!;
   if (!L.pattern) L.pattern = tmpCtx.createPattern(getMottle(), "repeat");
 
   // the rim: wet region minus its eroded copy - the outer contour only,
   // built in the patch's own coordinates
   tmpCtx.setTransform(1, 0, 0, 1, 0, 0);
   tmpCtx.globalCompositeOperation = "source-over";
-  tmpCtx.clearRect(0, 0, lw, lh);
-  tmpCtx.drawImage(L.wet, lx, ly, lw, lh, 0, 0, lw, lh);
+  tmpCtx.clearRect(0, 0, ew, eh);
+  tmpCtx.drawImage(L.wet, ex, ey, ew, eh, 0, 0, ew, eh);
   tmpCtx.globalCompositeOperation = "destination-out";
-  tmpCtx.drawImage(L.core, lx, ly, lw, lh, 0, 0, lw, lh);
+  tmpCtx.drawImage(L.core, ex, ey, ew, eh, 0, 0, ew, eh);
   // deepen it to pigment-at-the-edge, whatever colors are in the loadout
   tmpCtx.globalCompositeOperation = "source-atop";
-  tmpCtx.fillStyle = state.dark ? "rgba(255,255,255,0.45)" : "rgba(45,22,16,0.5)";
-  tmpCtx.fillRect(0, 0, lw, lh);
+  tmpCtx.fillStyle = state.dark ? "rgba(255,255,255,0.65)" : "rgba(45,22,16,0.72)";
+  tmpCtx.fillRect(0, 0, ew, eh);
   // bite unevenly into the contour so it pools in some places and nearly
   // vanishes in others. The pattern is pinned to layer coordinates, or it
   // would slide as the patch moves and the same edge would keep changing.
   if (L.pattern) {
-    L.pattern.setTransform(new DOMMatrix().translate(-lx, -ly));
+    L.pattern.setTransform(new DOMMatrix().translate(-ex, -ey));
     tmpCtx.globalCompositeOperation = "destination-out";
     tmpCtx.globalAlpha = 0.45;
     tmpCtx.fillStyle = L.pattern;
-    tmpCtx.fillRect(0, 0, lw, lh);
+    tmpCtx.fillRect(0, 0, ew, eh);
     tmpCtx.globalAlpha = 1;
   }
   tmpCtx.globalCompositeOperation = "source-over";
+
+  // spread the stranded pigment out into the water instead of leaving it as
+  // a drawn contour with two hard sides
+  rimCtx.setTransform(1, 0, 0, 1, 0, 0);
+  rimCtx.globalCompositeOperation = "source-over";
+  rimCtx.clearRect(0, 0, ew, eh);
+  rimCtx.filter = `blur(${BLUR_RIM}px)`;
+  rimCtx.drawImage(L.tmp, 0, 0);
+  rimCtx.filter = "none";
+
+  // and feather the wash boundary, so the stain fades into the paper rather
+  // than stopping at a cut edge
+  tmpCtx.clearRect(0, 0, ew, eh);
+  tmpCtx.filter = `blur(${BLUR_WASH}px)`;
+  tmpCtx.drawImage(L.wet, ex, ey, ew, eh, 0, 0, ew, eh);
+  tmpCtx.filter = "none";
 
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -264,11 +301,11 @@ function composite(ctx: CanvasRenderingContext2D, state: WaterState) {
   // the wash: one flat pass over the whole wet region, so overlapping dabs
   // read as a single even stain rather than mottled buildup
   ctx.globalCompositeOperation = state.dark ? "source-over" : "multiply";
-  ctx.globalAlpha = 0.2;
-  ctx.drawImage(L.wet, lx, ly, lw, lh, rx, ry, rw, rh);
+  ctx.globalAlpha = 0.22;
+  ctx.drawImage(L.tmp, ox, oy, lw, lh, rx, ry, rw, rh);
 
-  ctx.globalAlpha = 0.85;
-  ctx.drawImage(L.tmp, 0, 0, lw, lh, rx, ry, rw, rh);
+  ctx.globalAlpha = 1;
+  ctx.drawImage(L.tmp2, ox, oy, lw, lh, rx, ry, rw, rh);
 
   ctx.restore();
 }
@@ -286,10 +323,10 @@ export const waterBrush: BrushImpl = {
     const lobes: Lobe[] = [];
     // low frequencies make the big lobes, high ones the fine meander;
     // amplitudes fall off with frequency so the outline never pinches shut
-    for (const f of [2, 3, 5, 7, 11]) {
+    for (const f of [2, 3, 5, 7]) {
       lobes.push({
         freq: f + Math.floor(rand() * 2),
-        amp: (0.22 / Math.sqrt(f)) * (0.6 + rand() * 0.9),
+        amp: (0.26 / Math.sqrt(f)) * (0.6 + rand() * 0.9),
         phase: rand() * Math.PI * 2,
       });
     }
